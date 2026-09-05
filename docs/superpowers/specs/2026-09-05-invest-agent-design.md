@@ -52,7 +52,7 @@ Ciclo padrão a cada **1h** (configurável):
 - Revisão semanal: Opus 5 via Batch API (−50%) lê o log da semana e escreve crítica no `learnings/`
 
 ### 4.4 Motor de regras (Python puro; a proposta só vira ordem se TODOS passarem)
-- **Whitelist** hardcoded: BTC, ETH + 3–5 altcoins líquidas (definir na implementação)
+- **Whitelist dinâmica por critérios** (decisão do dono 2026-09-05: agente com liberdade de escolha dentro de universo protegido): código recalcula semanalmente as ~20 maiores moedas da Binance spot por volume (pares USDT), excluindo stablecoins e tokens alavancados, listadas há ≥1 ano; BTC e ETH sempre incluídas. O LLM escolhe livremente dentro da lista; ticker fora dela = rejeição automática. Primeiro trade em ativo novo exige HITL
 - **Sizing por código**: fração fixa do capital modulada pela convicção, teto 10%/ativo, exposição total ≤60%
 - Sanidade: preço-alvo ≤ X% do último tick; spread e liquidez do book mínimos; mercado/dado fresco (candle ≤ N min)
 - Anti-overtrading: ≤4 ordens/dia, cooldown 4h/ativo, idempotency key por ciclo
@@ -79,7 +79,7 @@ Ciclo padrão a cada **1h** (configurável):
 | 0 | Motor de regras + testes unitários; esqueleto de projeto | 100% dos gates com teste; zero LLM |
 | 1 | Ingestão + backtest (vectorbt varredura → backtrader fills realistas), custos 0,10% + slippage modelados | Backtest honesto vs baseline buy-and-hold; ciente de que backtest com LLM em janela antiga é suspeito (look-ahead do treino) |
 | 2 | Paper trading: testnet Binance (integração) + dry-run com dados reais (estratégia); Telegram completo; loop Claude ativo | **1–3 meses**; 30 dias consecutivos sem incidente operacional não tratado; motor nunca aprovou ordem que revisão manual rejeitaria |
-| 3 | Live micro (capital a definir; sugestão R$ 500–2.000) | ≥1 mês de métricas estáveis; PnL vs buy-and-hold medido |
+| 3 | Live micro com **R$ 1.000** (decisão do dono 2026-09-05) | ≥1 mês de métricas estáveis; PnL vs buy-and-hold medido |
 | 4 | Escala gradual; ativação opcional do módulo 2 (opções EUA, começando em paper Alpaca) | Só com evidência da fase 3 |
 
 ## 6. Orçamento
