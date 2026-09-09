@@ -33,9 +33,13 @@ Valores em `src/invest_agent/config.py` — só um humano edita.
 ## Limitações conhecidas (Fase 0)
 
 - **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
-  avalia demais posições a avg_price (custo), não a preço de mercado. Em
-  produção (Fase 1+), o orquestrador com market data completo recalculará
-  antes de enviar à exchange.
+  avalia demais posições a avg_price (custo), não a preço de mercado.
+  Quando posições se valorizaram desde a entrada, isto SUBESTIMA o total
+  investido, podendo aprovar uma compra que faz a exposição real
+  (mark-to-market) ultrapassar silenciosamente o teto. O erro é
+  unidirecional e permissivo em exposição. Em produção (Fase 1+), o
+  orquestrador com market data completo recalculará antes de enviar à
+  exchange.
 - **HITL de primeira entrada:** aprovação humana para primeiro trade em
   ativo novo adiada para Fase 2 (o gatilho de 2% já cobre entradas com
   conviction > 0.2).

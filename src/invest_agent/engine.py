@@ -4,9 +4,13 @@ para o dono ver o quadro completo no Telegram.
 
 Nota sobre total_invested_notional em _build_buy():
 Avalia as demais posições a avg_price (custo histórico), não a preço de
-mercado. Em Fase 0 isto é aceitável pois o agent não rebalanceia, apenas
-abre/fecha posições. Em produção (Fase 1+), o orquestrador com market data
-completo recalculará a exposição mark-to-market antes de enviar à exchange."""
+mercado. Quando posições se valorizaram desde a entrada, isto SUBESTIMA o
+total investido, podendo aprovar uma compra que faz a exposição real
+(mark-to-market) ultrapassar silenciosamente o teto de 60%. O erro é
+unidirecional e permissivo em exposição. Em Fase 0 isto é aceitável pois o
+agent não rebalanceia, apenas abre/fecha posições. Em produção (Fase 1+),
+o orquestrador com market data completo recalculará a exposição antes de
+enviar à exchange."""
 from __future__ import annotations
 
 import hashlib
