@@ -111,3 +111,9 @@ def test_close_fora_da_whitelist_ainda_permitido(engine):
     assert v.status is VerdictStatus.APPROVED
     assert v.order.side == "SELL" and v.order.qty == 2.0
     assert not any("whitelist" in r for r in v.reasons)
+
+
+def test_snapshot_simbolo_mismatch_levanta_erro(engine):
+    # Guard: MarketSnapshot e Proposal devem ter o mesmo símbolo
+    with pytest.raises(ValueError, match="snapshot de mercado de ETHUSDT não corresponde à proposta de SOLUSDT"):
+        engine.evaluate(_prop(symbol="SOLUSDT"), _pf(), _mkt(symbol="ETHUSDT"), MARKS, NOW)

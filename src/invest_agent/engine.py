@@ -54,6 +54,9 @@ class RulesEngine:
         if proposal.action is Action.HOLD:
             return Verdict(VerdictStatus.APPROVED, [], None)
 
+        if market.symbol != proposal.symbol:
+            raise ValueError(f"snapshot de mercado de {market.symbol} não corresponde à proposta de {proposal.symbol}")
+
         reasons: list[str] = []
 
         if self.kill_switch.is_active():

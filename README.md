@@ -45,3 +45,8 @@ Valores em `src/invest_agent/config.py` — só um humano edita.
   conviction > 0.2).
 - **HITL pós-circuit-breaker:** aprovação humana para reentrada após
   circuit breaker adiada para Fase 2.
+- **Gates em saídas:** saídas (SELL/CLOSE) ainda passam pelos gates de
+  frequência, qualidade de mercado, circuit breakers e kill switch —
+  comportamento fail-closed intencional na Fase 0; uma saída de
+  de-risking pode ser atrasada por cooldown ou spread alto; revisitar
+  na Fase 1.
