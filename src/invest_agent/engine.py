@@ -1,6 +1,12 @@
 """O gate central: a ÚNICA porta entre uma proposta do LLM e uma ordem.
 Toda regra é acumulativa — o Verdict rejeitado carrega TODOS os motivos,
-para o dono ver o quadro completo no Telegram."""
+para o dono ver o quadro completo no Telegram.
+
+Nota sobre total_invested_notional em _build_buy():
+Avalia as demais posições a avg_price (custo histórico), não a preço de
+mercado. Em Fase 0 isto é aceitável pois o agent não rebalanceia, apenas
+abre/fecha posições. Em produção (Fase 1+), o orquestrador com market data
+completo recalculará a exposição mark-to-market antes de enviar à exchange."""
 from __future__ import annotations
 
 import hashlib
@@ -53,7 +59,8 @@ class RulesEngine:
         if halt is not HaltLevel.NONE:
             reasons.append(f"circuit breaker acionado (nível {halt.name})")
 
-        if proposal.symbol not in self.whitelist:
+        # Whitelist governa entradas (BUY); posição existente deve sempre ser fechável
+        if proposal.action is Action.BUY and proposal.symbol not in self.whitelist:
             reasons.append(f"{proposal.symbol} fora da whitelist")
 
         reasons += check_market_quality(market, self.profile)

@@ -99,3 +99,15 @@ def test_close_vende_a_posicao_inteira(engine):
     assert v.status is VerdictStatus.APPROVED
     assert v.order.side == "SELL" and v.order.qty == 3.0
     assert v.order.stop_loss_price is None
+
+
+def test_close_fora_da_whitelist_ainda_permitido(engine):
+    # Regressão: posição existente em símbolo fora da whitelist deve ser fechável.
+    # A whitelist governa entradas, não saídas.
+    pf = _pf(positions={"SCAMUSDT": Position("SCAMUSDT", qty=2.0, avg_price=40.0)})
+    v = engine.evaluate(_prop(symbol="SCAMUSDT", action=Action.CLOSE, conviction=1.0),
+                        pf, _mkt(symbol="SCAMUSDT"), MARKS, NOW)
+    # 2 * ~50 = ~100 USDT = 1% < HITL => aprovado direto
+    assert v.status is VerdictStatus.APPROVED
+    assert v.order.side == "SELL" and v.order.qty == 2.0
+    assert not any("whitelist" in r for r in v.reasons)
