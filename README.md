@@ -91,7 +91,9 @@ por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
 Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
 esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
 
-## ⚠️ Limitações conhecidas (Fase 0)
+## ⚠️ Limitações conhecidas
+
+### (Fase 0)
 
 - **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
   avalia demais posições a avg_price (custo), não a preço de mercado.
@@ -111,3 +113,15 @@ esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
   comportamento fail-closed intencional na Fase 0; uma saída de
   de-risking pode ser atrasada por cooldown ou spread alto; revisitar
   na Fase 1.
+
+### (Fase 1)
+
+- **Sizing em unidades inteiras:** backtest executa ordens com número inteiro
+  de unidades (`int(cash / (price * 1.05))`). Para ativos muito caros
+  (ex.: BTCUSDT ≥ 38.500), caixa de 10.000 USDT resulta em size = 0.
+  Aumente `--cash` para testar, ou use sizing fracionário (follow-up
+  documentado).
+- **Seleção in-sample:** o sweep escolhe os melhores parâmetros na mesma
+  janela em que o veredito é calculado (otimismo por construção).
+  Trate o resultado como triagem, não como validação out-of-sample;
+  validação cruzada fica para Fase 2.

@@ -8,10 +8,6 @@ from .engine_bt import BacktestRun
 from .sweep import SweepResult
 
 
-def _pct(value: float) -> str:
-    return f"{value:+.2%}".replace("%", "%")
-
-
 def build_report(symbol: str, interval: str, params: dict,
                  run: BacktestRun, candles: list[Candle], costs: CostModel,
                  sweep: list[SweepResult] | None = None) -> str:
@@ -35,6 +31,7 @@ def build_report(symbol: str, interval: str, params: dict,
         f"Trades fechados:       {run.n_trades}",
         "",
         f"Veredito: {veredito}",
+        "Aviso: parâmetros escolhidos in-sample (mesma janela do veredito) — resultado otimista; trate como triagem, não validação out-of-sample.",
     ]
     if sweep:
         linhas += ["", "## Top do sweep (retorno bruto simulado)"]

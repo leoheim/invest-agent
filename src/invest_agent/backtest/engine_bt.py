@@ -57,6 +57,7 @@ class _SignalStrategy(bt.Strategy):
         self.equity_curve: list[float] = []
         self.pending_size: int | None = None
         self.pending_close: float | None = None
+        self.zero_size_entries = 0
 
     def next(self):
         self.equity_curve.append(self.broker.getvalue())
@@ -68,6 +69,8 @@ class _SignalStrategy(bt.Strategy):
             size = int(cash / (price * 1.05))  # margem p/ gap+slippage
             if size > 0:
                 self.buy(size=size)
+            else:
+                self.zero_size_entries += 1
         elif signal == Signal.EXIT and self.position:
             self.close()
 
@@ -97,8 +100,13 @@ def run_backtrader(candles: list[Candle], signals: list[int],
     cerebro.addstrategy(_SignalStrategy, signals=signals,
                         stake_pct=stake_pct)
     (strat,) = cerebro.run()
-    final_value = cerebro.broker.getvalue()
     n_trades = strat.closed_trades
+    if n_trades == 0 and strat.zero_size_entries > 0:
+        raise ValueError(
+            f"caixa insuficiente para 1 unidade ao preço atual — nenhum trade "
+            f"executado; aumente --cash (sizing fracionário é follow-up "
+            f"documentado)")
+    final_value = cerebro.broker.getvalue()
     if strat.pending_size:  # posição ainda aberta ao final: liquida forçado
         final_value = cerebro.broker.getcash() + (
             strat.pending_size * costs.sell_price(strat.pending_close)

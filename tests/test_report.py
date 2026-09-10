@@ -32,6 +32,7 @@ def test_report_estrategia_que_supera():
     assert "SUPERA o buy-and-hold" in texto
     assert "3" in texto                 # nº de trades
     assert "fast" in texto              # params visíveis
+    assert "in-sample" in texto         # aviso sobre seleção in-sample
 
 
 def test_report_estrategia_que_nao_supera():

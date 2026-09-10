@@ -78,3 +78,17 @@ def test_posicao_aberta_no_fim_liquida_no_ultimo_close_com_custos():
                 - 94 * 109 * 0.001)
     assert run.final_value == pytest.approx(esperado)
     assert run.n_trades == 1
+
+
+def test_zero_sizing_levanta_erro_claro():
+    # Preço constante alto (100_000) e caixa baixo (10_000) resultam em
+    # size = int(9900 / (100_000 * 1.05)) = 0, que deve falhar alto
+    candles_caro = [
+        _candle(0, 100_000.0, 100_000.0),
+        _candle(1, 100_000.0, 100_000.0),
+    ]
+    signals = [1, 0]  # ENTER no candle 0
+    zero = CostModel(fee_pct=0.0, slippage_pct=0.0)
+    with pytest.raises(ValueError, match="caixa insuficiente"):
+        run_backtrader(candles_caro, signals, zero, initial_cash=10_000.0,
+                       stake_pct=0.99)
