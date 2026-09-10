@@ -13,7 +13,7 @@ def test_build_portfolio_mark_to_market(tmp_path):
     store = SqliteStore(tmp_path / "a.db")
     store.upsert_position("BTCUSDT", 0.5, 90_000.0)   # avg 90k
     store.upsert_position("ETHUSDT", 2.0, 4_000.0)
-    balances = {"USDT": 1_000.0, "BTC": 0.5, "ETH": 2.0}
+    balances = {"USDT": (1_000.0, 0.0), "BTC": (0.5, 0.0), "ETH": (2.0, 0.0)}
     prices = {"BTCUSDT": 100_000.0, "ETHUSDT": 3_000.0}
     pf = build_portfolio(store, balances, prices, NOW)
     assert pf.cash == 1_000.0
@@ -27,7 +27,8 @@ def test_build_portfolio_mark_to_market(tmp_path):
 def test_build_portfolio_balance_zerado_remove_posicao(tmp_path):
     store = SqliteStore(tmp_path / "a.db")
     store.upsert_position("BTCUSDT", 0.5, 90_000.0)
-    pf = build_portfolio(store, {"USDT": 100.0}, {"BTCUSDT": 100_000.0}, NOW)
+    pf = build_portfolio(store, {"USDT": (100.0, 0.0)},
+                         {"BTCUSDT": 100_000.0}, NOW)
     assert pf.positions == {} and pf.equity == 100.0
     assert store.get_positions() == {}  # limpou a tabela
     store.close()
@@ -36,9 +37,27 @@ def test_build_portfolio_balance_zerado_remove_posicao(tmp_path):
 def test_build_portfolio_qty_do_balance_vence(tmp_path):
     store = SqliteStore(tmp_path / "a.db")
     store.upsert_position("BTCUSDT", 0.5, 90_000.0)
-    balances = {"USDT": 0.0, "BTC": 0.3}  # exchange diz 0.3
+    balances = {"USDT": (0.0, 0.0), "BTC": (0.3, 0.0)}  # exchange diz 0.3
     pf = build_portfolio(store, balances, {"BTCUSDT": 100_000.0}, NOW)
     assert pf.positions["BTCUSDT"].qty == 0.3
+    store.close()
+
+
+def test_build_portfolio_qty_conta_locked_do_stop_gtc(tmp_path):
+    # C1: o stop STOP_LOSS_LIMIT GTC trava o ativo base (free -> locked) na
+    # Binance real assim que é colocado. Se build_portfolio só olhasse
+    # `free`, a posição sumiria no primeiro ciclo após a compra.
+    store = SqliteStore(tmp_path / "a.db")
+    store.upsert_position("BTCUSDT", 0.5, 90_000.0, "ia-sl")
+    balances = {"USDT": (1_000.0, 50.0),  # 50 USDT travados (ordem aberta)
+               "BTC": (0.0, 0.5)}        # tudo travado no stop GTC
+    pf = build_portfolio(store, balances, {"BTCUSDT": 100_000.0}, NOW)
+    assert "BTCUSDT" in pf.positions
+    assert pf.positions["BTCUSDT"].qty == 0.5
+    assert pf.cash == 1_000.0  # cash é só o USDT FREE, nunca o locked
+    assert pf.equity == 1_000.0 + 0.5 * 100_000.0
+    # a posição não foi apagada da tabela
+    assert store.get_positions()["BTCUSDT"][0] == 0.5
     store.close()
 
 

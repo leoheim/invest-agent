@@ -82,11 +82,22 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
     quote = float(resp.get("cummulativeQuoteQty", "0") or 0)
     fill_price = quote / executed_qty if executed_qty else order.limit_price
     if order.side == "BUY":
-        old_qty, old_avg = (old[0], old[1]) if old else (0.0, 0.0)
+        old_qty, old_avg, old_stop_id = old if old else (0.0, 0.0, None)
         new_qty = old_qty + executed_qty
         new_avg = ((old_qty * old_avg) + (executed_qty * fill_price)) / new_qty
+        # I1: a posição fica visível ANTES do stop — uma falha no
+        # place_stop_loss não pode deixar moedas sem posição rastreada.
+        store.upsert_position(order.symbol, new_qty, new_avg, None)
+        if old_stop_id:
+            # I2: um stop só por posição — cancela o antigo (que travava
+            # só old_qty) antes de colocar um novo cobrindo new_qty,
+            # senão ele fica orfão (resting, id perdido, qty travada).
+            try:
+                adapter.cancel_order(order.symbol, old_stop_id)
+            except Exception:
+                pass  # stop pode já ter executado/expirado
         stop_id = f"{order.client_order_id}-sl"
-        adapter.place_stop_loss(order.symbol, executed_qty,
+        adapter.place_stop_loss(order.symbol, new_qty,
                                 order.stop_loss_price, stop_id)
         store.upsert_position(order.symbol, new_qty, new_avg, stop_id)
     else:
@@ -96,12 +107,14 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
         else:
             # fill parcial de IOC: o remanescente fica descoberto até
             # recolocarmos o stop na exchange (ruling do controller).
+            avg = old[1] if old else fill_price
+            # I1: persiste o remanescente ANTES do stop, mesma razão.
+            store.upsert_position(order.symbol, remaining, avg, None)
             stop_price = order.limit_price * (1 - stop_loss_pct)
             stop_id = f"{order.client_order_id}-sl"
             adapter.place_stop_loss(order.symbol, remaining, stop_price,
                                     stop_id)
-            store.upsert_position(order.symbol, remaining,
-                                  old[1] if old else fill_price, stop_id)
+            store.upsert_position(order.symbol, remaining, avg, stop_id)
     return True
 
 

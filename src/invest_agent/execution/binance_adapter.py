@@ -110,12 +110,19 @@ class BinanceSpotAdapter:
 
     # --- conta (assinado) ---
 
-    def get_balances(self) -> dict[str, float]:
+    def get_balances(self) -> dict[str, tuple[float, float]]:
+        """{asset: (free, locked)} — um STOP_LOSS_LIMIT GTC move o ativo
+        base para `locked`; se olhássemos só `free`, build_portfolio
+        acharia a posição zerada assim que o stop de entrada fosse
+        colocado (C1)."""
         data = self._request("GET", "/api/v3/account", {},
                              signed=True, retry=True)
-        return {b["asset"]: float(b["free"])
-                for b in data.get("balances", [])
-                if float(b["free"]) > 0}
+        out: dict[str, tuple[float, float]] = {}
+        for b in data.get("balances", []):
+            free, locked = float(b["free"]), float(b["locked"])
+            if free + locked > 0:
+                out[b["asset"]] = (free, locked)
+        return out
 
     # --- ordens (assinado; SEM retry) ---
 

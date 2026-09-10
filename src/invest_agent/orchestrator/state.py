@@ -16,12 +16,19 @@ def _base_asset(symbol: str) -> str:
     return symbol.removesuffix("USDT")
 
 
-def build_portfolio(store: SqliteStore, balances: dict[str, float],
+def build_portfolio(store: SqliteStore,
+                    balances: dict[str, tuple[float, float]],
                     prices: dict[str, float], now: datetime) -> PortfolioState:
-    cash = balances.get("USDT", 0.0)
+    """balances: {asset: (free, locked)} — um STOP_LOSS_LIMIT GTC trava o
+    ativo base (free -> locked) assim que é colocado na Binance real, então
+    a quantidade da posição precisa ser free+locked. cash usa só o USDT
+    FREE — o que está locked está preso numa ordem aberta, não é caixa
+    disponível."""
+    cash = balances.get("USDT", (0.0, 0.0))[0]
     positions: dict[str, Position] = {}
     for symbol, (_, avg_price, _) in store.get_positions().items():
-        qty = balances.get(_base_asset(symbol), 0.0)
+        free, locked = balances.get(_base_asset(symbol), (0.0, 0.0))
+        qty = free + locked
         if qty <= 0:
             store.delete_position(symbol)  # a exchange é a verdade
             continue

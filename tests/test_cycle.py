@@ -1,5 +1,4 @@
 # tests/test_cycle.py
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,15 +17,26 @@ NOW = datetime(2026, 9, 10, 12, 5, tzinfo=timezone.utc)
 
 
 class FakeAdapter:
+    """Simula saldos free/locked como a Binance real (C1): place_stop_loss
+    trava a quantidade do ativo base (free -> locked) e cancel_order
+    destrava de volta. É o que torna a trava do C1 (posição não pode
+    sumir com o saldo preso num stop GTC) testável sem rede."""
+
     def __init__(self, price=100.0, bid=99.9, ask=100.0,
-                 balances=None, fill_qty=None):
+                 balances=None, fill_qty=None, stop_loss_error=None):
         self.price, self.bid, self.ask = price, bid, ask
-        self.balances = balances or {"USDT": 10_000.0}
+        balances = balances or {"USDT": 10_000.0}
+        self._balances = {asset: [free, 0.0]
+                          for asset, free in balances.items()}
         self.fill_qty = fill_qty
+        self.stop_loss_error = stop_loss_error
         self.orders, self.stops, self.cancels = [], [], []
+        self._locks = {}  # client_order_id -> (asset, qty travada)
 
     def get_balances(self):
-        return dict(self.balances)
+        return {asset: (free, locked)
+                for asset, (free, locked) in self._balances.items()
+                if free + locked > 0}
 
     def get_price(self, symbol):
         return self.price
@@ -37,16 +47,39 @@ class FakeAdapter:
     def place_limit_ioc(self, order):
         self.orders.append(order)
         qty = self.fill_qty if self.fill_qty is not None else order.qty
+        quote = qty * order.limit_price
+        asset = order.symbol.removesuffix("USDT")
+        base = self._balances.setdefault(asset, [0.0, 0.0])
+        cash = self._balances.setdefault("USDT", [0.0, 0.0])
+        if order.side == "BUY":
+            base[0] += qty
+            cash[0] -= quote
+        else:
+            base[0] -= qty
+            cash[0] += quote
         return {"status": "FILLED" if qty == order.qty else "EXPIRED",
                 "executedQty": str(qty),
-                "cummulativeQuoteQty": str(qty * order.limit_price)}
+                "cummulativeQuoteQty": str(quote)}
 
     def place_stop_loss(self, symbol, qty, stop_price, client_order_id):
+        if self.stop_loss_error is not None:
+            raise self.stop_loss_error
         self.stops.append((symbol, qty, stop_price, client_order_id))
+        asset = symbol.removesuffix("USDT")
+        bal = self._balances.setdefault(asset, [0.0, 0.0])
+        bal[0] -= qty
+        bal[1] += qty
+        self._locks[client_order_id] = (asset, qty)
         return {"status": "NEW"}
 
     def cancel_order(self, symbol, client_order_id):
         self.cancels.append((symbol, client_order_id))
+        lock = self._locks.pop(client_order_id, None)
+        if lock:
+            asset, qty = lock
+            bal = self._balances.setdefault(asset, [0.0, 0.0])
+            bal[0] += qty
+            bal[1] -= qty
         return {}
 
 
@@ -212,4 +245,93 @@ def test_breaker_persiste_mesmo_em_ciclo_hold(tmp_path):
     result2 = run_cycle(store, cs, adapter, engine, proposer, settings,
                         NOW + timedelta(hours=1))
     assert result2.verdict_status == "halted"
+    store.close()
+
+
+def test_ciclo_apos_buy_com_stop_travado_nao_apaga_posicao_nem_halta(tmp_path):
+    # C1: depois de um BUY executado, o stop GTC trava o ativo base
+    # (free -> locked) na Binance real. O ciclo seguinte não pode achar a
+    # posição zerada (free=0) nem disparar um breaker espúrio pela "perda"
+    # de equity.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    result1 = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result1.executed is True
+    qty_bought = adapter.orders[0].qty
+    free, locked = adapter.get_balances()["BTC"]
+    assert free == pytest.approx(0.0) and locked == pytest.approx(qty_bought)
+
+    def hold_proposer(context):
+        return Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                        rationale="x", cycle_id=context["cycle_id"])
+
+    result2 = run_cycle(store, cs, adapter, engine, hold_proposer, settings,
+                        NOW + timedelta(hours=1))
+    assert result2.verdict_status != "halted"
+    assert store.get_halt() is None  # nenhum breaker espúrio disparado
+
+    positions = store.get_positions()
+    assert "BTCUSDT" in positions  # a posição não sumiu
+    qty, avg, stop_id = positions["BTCUSDT"]
+    assert qty == pytest.approx(qty_bought)
+    assert stop_id is not None
+    store.close()
+
+
+def test_buy_com_falha_no_stop_ainda_deixa_posicao_rastreada(tmp_path):
+    # I1: se place_stop_loss falhar depois do fill, a posição não pode
+    # ficar invisível (moedas na carteira sem stop e sem linha em
+    # `positions`). A falha ainda propaga (fail-closed), mas a posição
+    # precisa existir com stop_order_id=None.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    adapter = FakeAdapter(stop_loss_error=RuntimeError("falha ao colocar stop"))
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop, adapter=adapter)
+    with pytest.raises(RuntimeError):
+        run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    positions = store.get_positions()
+    assert "BTCUSDT" in positions
+    qty, avg, stop_id = positions["BTCUSDT"]
+    assert qty == adapter.orders[0].qty
+    assert stop_id is None  # o stop falhou, mas a posição ficou rastreada
+    store.close()
+
+
+def test_buy_em_posicao_existente_cancela_stop_antigo_e_poe_um_novo(tmp_path):
+    # I2: um BUY sobre posição existente não pode deixar o stop antigo
+    # orfão (resting na exchange, id perdido, qty travada). Cancela o
+    # antigo e coloca UM único stop novo cobrindo o total.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    adapter = FakeAdapter(balances={"USDT": 10_000.0, "BTC": 0.05})
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop, adapter=adapter)
+    # posição existente com stop já resting (simula ciclo anterior) — o
+    # saldo correspondente já está travado (free -> locked), como na
+    # Binance real
+    store.upsert_position("BTCUSDT", 0.05, 90.0, "ia-old-sl")
+    adapter.place_stop_loss("BTCUSDT", 0.05, 85.5, "ia-old-sl")
+    adapter.stops.clear()  # só nos interessa o(s) stop(s) deste ciclo
+
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+
+    assert result.executed is True
+    assert ("BTCUSDT", "ia-old-sl") in adapter.cancels  # stop antigo cancelado
+    assert len(adapter.stops) == 1  # um único stop novo — não dois
+    symbol, qty, stop_price, new_stop_id = adapter.stops[0]
+    executed_qty = adapter.orders[0].qty
+    assert qty == pytest.approx(0.05 + executed_qty)  # cobre a posição toda
+    assert new_stop_id != "ia-old-sl"
+
+    total_qty, avg, saved_stop_id = store.get_positions()["BTCUSDT"]
+    assert total_qty == pytest.approx(0.05 + executed_qty)
+    assert saved_stop_id == new_stop_id
+
+    # cancelar o stop antigo liberou a trava — sem saldo órfão
+    free, locked = adapter.get_balances()["BTC"]
+    assert locked == pytest.approx(total_qty)
+    assert free == pytest.approx(0.0)
     store.close()

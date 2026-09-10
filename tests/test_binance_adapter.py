@@ -55,7 +55,21 @@ def test_get_balances_assina_e_filtra_zerados():
         ]}).encode()
 
     balances = _adapter(http).get_balances()
-    assert balances == {"USDT": 1000.5, "BTC": 0.25}
+    assert balances == {"USDT": (1000.5, 0.0), "BTC": (0.25, 0.0)}
+
+
+def test_get_balances_inclui_ativo_todo_travado_num_stop():
+    # C1: um STOP_LOSS_LIMIT GTC move o saldo de free para locked; um
+    # ativo com free=0 e locked>0 (posição travada no stop) não pode ser
+    # filtrado, senão build_portfolio acha a posição zerada.
+    def http(method, url, headers, body):
+        return json.dumps({"balances": [
+            {"asset": "USDT", "free": "500.0", "locked": "0"},
+            {"asset": "BTC", "free": "0.00000000", "locked": "0.5"},
+        ]}).encode()
+
+    balances = _adapter(http).get_balances()
+    assert balances == {"USDT": (500.0, 0.0), "BTC": (0.0, 0.5)}
 
 
 def test_place_limit_ioc_monta_ordem():
