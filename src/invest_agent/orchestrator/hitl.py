@@ -19,7 +19,12 @@ def apply_hitl_overrides(verdict: Verdict, proposal: Proposal,
         return verdict
 
     reasons: list[str] = []
-    last_orders = store.last_order_at_by_symbol()
+    # C2: as duas regras têm que travar em ordem EXECUTADA, não em mera
+    # intenção registrada — NEEDS_APPROVAL rejeitada/expirada e dry-run
+    # também gravam order_json (spec §4.4 exige isto para primeiro
+    # trade/pós-breaker; o cooldown do engine, em compensação, é
+    # intencionalmente conservador e continua usando last_order_at_by_symbol).
+    last_orders = store.last_executed_order_at_by_symbol()
 
     if (proposal.action is Action.BUY
             and proposal.symbol not in portfolio.positions

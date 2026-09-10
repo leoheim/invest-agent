@@ -44,9 +44,11 @@ CREATE TABLE IF NOT EXISTS decision_log (
     fills_json TEXT,
     api_cost_usd REAL NOT NULL DEFAULT 0.0
 );
-CREATE TRIGGER IF NOT EXISTS decision_log_no_update
-BEFORE UPDATE ON decision_log
-BEGIN SELECT RAISE(ABORT, 'decision_log é append-only'); END;
+DROP TRIGGER IF EXISTS decision_log_no_update;
+CREATE TRIGGER decision_log_no_update
+BEFORE UPDATE OF decision_id, ts, inputs_hash, snapshot_json, proposal_json,
+    verdict_json, order_json, api_cost_usd ON decision_log
+BEGIN SELECT RAISE(ABORT, 'decision_log é append-only (exceto fills_json, gravado uma única vez na execução real)'); END;
 CREATE TRIGGER IF NOT EXISTS decision_log_no_delete
 BEFORE DELETE ON decision_log
 BEGIN SELECT RAISE(ABORT, 'decision_log é append-only'); END;
@@ -195,6 +197,16 @@ class SqliteStore:
              record.order_json, record.fills_json, record.api_cost_usd))
         self._con.commit()
 
+    def set_decision_fills(self, decision_id: str, fills_json: str) -> None:
+        """Única mutação permitida em decision_log (C2) — grava o fato de
+        que a ordem intencionada de fato EXECUTOU, distinguindo isso de
+        meros registros de intenção (NEEDS_APPROVAL, dry-run) que também
+        gravam order_json. O trigger append-only permite só esta coluna."""
+        self._con.execute(
+            "UPDATE decision_log SET fills_json=? WHERE decision_id=?",
+            (fills_json, decision_id))
+        self._con.commit()
+
     def read_decisions(self) -> list[DecisionRecord]:
         rows = self._con.execute(
             "SELECT decision_id, ts, inputs_hash, snapshot_json,"
@@ -315,6 +327,21 @@ class SqliteStore:
         rows = self._con.execute(
             "SELECT ts, order_json FROM decision_log"
             " WHERE order_json IS NOT NULL ORDER BY ts").fetchall()
+        out: dict[str, datetime] = {}
+        for ts, order_json in rows:
+            symbol = json.loads(order_json).get("symbol")
+            if symbol:
+                out[symbol] = datetime.fromisoformat(ts)
+        return out
+
+    def last_executed_order_at_by_symbol(self) -> dict[str, datetime]:
+        """Como last_order_at_by_symbol, mas só conta ordens que de fato
+        EXECUTARAM (fills_json preenchido) — usado pelo HITL obrigatório
+        (C2): intenção registrada (NEEDS_APPROVAL rejeitada/expirada,
+        dry-run) não pode desarmar a exigência de aprovação humana."""
+        rows = self._con.execute(
+            "SELECT ts, order_json FROM decision_log WHERE order_json"
+            " IS NOT NULL AND fills_json IS NOT NULL ORDER BY ts").fetchall()
         out: dict[str, datetime] = {}
         for ts, order_json in rows:
             symbol = json.loads(order_json).get("symbol")

@@ -54,3 +54,33 @@ def test_claim_pending_recusa_id_inexistente_ou_nao_aprovado(tmp_path):
     store.add_pending("d1", NOW, NOW)  # status='pending', não 'approved'
     assert store.claim_pending("d1") is False
     store.close()
+
+
+def test_set_decision_fills_atualiza_so_essa_coluna(tmp_path):
+    # C2: set_decision_fills é a única mutação permitida em decision_log —
+    # o resto da linha (append-only) tem que continuar intacto.
+    store = SqliteStore(tmp_path / "a.db")
+    store.append_decision(DecisionRecord(
+        decision_id="d1", ts=NOW, inputs_hash="h", snapshot_json="{}",
+        proposal_json="{}", verdict_json="{}",
+        order_json='{"symbol": "BTCUSDT"}'))
+    store.set_decision_fills("d1", '{"executed_qty": 0.5}')
+    rec = store.get_decision("d1")
+    assert rec.fills_json == '{"executed_qty": 0.5}'
+    assert rec.order_json == '{"symbol": "BTCUSDT"}'
+    assert rec.inputs_hash == "h"
+    store.close()
+
+
+def test_last_executed_order_at_by_symbol_ignora_sem_fills(tmp_path):
+    # C2: uma decisão com order_json mas sem fills_json (intenção
+    # registrada, nunca executada) não pode contar para o HITL obrigatório.
+    store = SqliteStore(tmp_path / "a.db")
+    store.append_decision(DecisionRecord(
+        decision_id="d1", ts=NOW, inputs_hash="h", snapshot_json="{}",
+        proposal_json="{}", verdict_json="{}",
+        order_json='{"symbol": "BTCUSDT"}'))
+    assert store.last_executed_order_at_by_symbol() == {}
+    store.set_decision_fills("d1", '{"executed_qty": 1}')
+    assert store.last_executed_order_at_by_symbol() == {"BTCUSDT": NOW}
+    store.close()

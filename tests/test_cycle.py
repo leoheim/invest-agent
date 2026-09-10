@@ -86,12 +86,17 @@ class FakeAdapter:
 def _historical_order_decision(store, symbol="BTCUSDT", ts=None):
     """Ajuste autorizado (ruling do controller): insere uma ordem antiga
     para `symbol` no decision_log, para que a regra HITL de "primeiro
-    trade" (Task 4) não dispare em testes que já existiam antes dela."""
+    trade" (Task 4) não dispare em testes que já existiam antes dela.
+    Ajuste C2: passou a incluir fills_json — desde que hitl.py exige ordem
+    EXECUTADA (não só intenção registrada) para desarmar a regra, este
+    histórico precisa representar um trade que de fato aconteceu."""
     from invest_agent.storage.sqlite_store import DecisionRecord
+    ts = ts or (NOW - timedelta(days=3))
     store.append_decision(DecisionRecord(
-        decision_id=f"hist-{symbol}", ts=ts or (NOW - timedelta(days=3)),
+        decision_id=f"hist-{symbol}", ts=ts,
         inputs_hash="h", snapshot_json="{}", proposal_json="{}",
-        verdict_json="{}", order_json=f'{{"symbol": "{symbol}"}}'))
+        verdict_json="{}", order_json=f'{{"symbol": "{symbol}"}}',
+        fills_json=f'{{"executed_qty": 1, "ts": "{ts.isoformat()}"}}'))
 
 
 def _fixture(tmp_path, proposal=None, adapter=None):
@@ -684,4 +689,25 @@ def test_aprovada_ja_em_execucao_por_outro_processo_e_ignorada(tmp_path):
         "SELECT status FROM pending_approvals WHERE decision_id=?",
         (decision_id,)).fetchone()[0]
     assert status == "executing"  # não foi tocada por este ciclo
+    store.close()
+
+
+def test_buy_executado_grava_fills_json_na_decisao(tmp_path):
+    # C2: sem gravar fills_json, o decision_log não tinha como distinguir
+    # ordem intencionada (registrada para HITL) de ordem de fato EXECUTADA
+    # — o HITL obrigatório (primeiro trade/pós-breaker) não teria um sinal
+    # confiável para desarmar.
+    import json as _json
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    _historical_order_decision(store)
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.executed is True
+    decision_id = f"{result.cycle_id}-BTCUSDT"
+    rec = store.get_decision(decision_id)
+    assert rec.fills_json is not None
+    fills = _json.loads(rec.fills_json)
+    assert fills["executed_qty"] == pytest.approx(adapter.orders[0].qty)
     store.close()

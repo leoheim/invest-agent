@@ -21,10 +21,18 @@ def _proposal(action=Action.BUY, symbol="SOLUSDT"):
 
 
 def _order_decision(decision_id, ts, symbol="SOLUSDT"):
+    # ajuste autorizado (ruling do controller, C2): as 3 chamadas deste
+    # helper representam ordens que de fato EXECUTARAM (histórico real de
+    # trade), então precisam de fills_json — sem isso, desde que hitl.py
+    # passou a exigir ordem executada (não só intenção registrada), essas
+    # decisões deixariam de "contar" e as regras de primeiro trade/
+    # pós-breaker disparariam de novo indevidamente nestes testes.
     return DecisionRecord(decision_id=decision_id, ts=ts, inputs_hash="h",
                           snapshot_json="{}", proposal_json="{}",
                           verdict_json="{}",
-                          order_json=f'{{"symbol": "{symbol}"}}')
+                          order_json=f'{{"symbol": "{symbol}"}}',
+                          fills_json=f'{{"executed_qty": 1, "ts":'
+                                     f' "{ts.isoformat()}"}}')
 
 
 def test_primeiro_trade_exige_aprovacao(tmp_path):
@@ -80,6 +88,67 @@ def test_ordem_depois_do_halt_ja_passou_nao_dispara(tmp_path):
     verdict = apply_hitl_overrides(APPROVED, _proposal(), portfolio,
                                    store, NOW)
     assert verdict.status is VerdictStatus.APPROVED
+    store.close()
+
+
+def test_pedido_rejeitado_nao_desarma_regra_de_primeiro_trade(tmp_path):
+    # C2 (cenário 1 da revisão): o primeiro pedido de BUY em SOLUSDT virou
+    # NEEDS_APPROVAL e foi registrado com order_json — mas o dono REJEITOU,
+    # nunca executou (fills_json fica None). Um pedido seguinte no mesmo
+    # símbolo tem que disparar a regra de novo — sem isto, bastava um
+    # pedido rejeitado/expirado para nunca mais exigir aprovação humana.
+    store = SqliteStore(tmp_path / "a.db")
+    store.append_decision(DecisionRecord(
+        decision_id="d0", ts=NOW - timedelta(hours=2), inputs_hash="h",
+        snapshot_json="{}", proposal_json="{}",
+        verdict_json='{"status": "needs_approval", "reasons": []}',
+        order_json='{"symbol": "SOLUSDT"}'))  # sem fills_json
+    portfolio = PortfolioState(equity=10_000.0, cash=10_000.0)
+    verdict = apply_hitl_overrides(APPROVED, _proposal(), portfolio,
+                                   store, NOW)
+    assert verdict.status is VerdictStatus.NEEDS_APPROVAL
+    assert any("primeiro trade" in r for r in verdict.reasons)
+    store.close()
+
+
+def test_dry_run_aprovado_nao_desarma_regra_de_primeiro_trade(tmp_path):
+    # C2 (cenário 2 da revisão): um ciclo --dry-run propôs BUY em SOLUSDT
+    # e o veredito foi APPROVED (não precisava de HITL) — mas dry_run
+    # impediu a execução real, então fills_json fica None. Isto não pode
+    # contar como "já operei este símbolo".
+    store = SqliteStore(tmp_path / "a.db")
+    store.append_decision(DecisionRecord(
+        decision_id="d0", ts=NOW - timedelta(hours=2), inputs_hash="h",
+        snapshot_json="{}", proposal_json="{}",
+        verdict_json='{"status": "approved", "reasons": []}',
+        order_json='{"symbol": "SOLUSDT"}'))  # sem fills_json: dry-run
+    portfolio = PortfolioState(equity=10_000.0, cash=10_000.0)
+    verdict = apply_hitl_overrides(APPROVED, _proposal(), portfolio,
+                                   store, NOW)
+    assert verdict.status is VerdictStatus.NEEDS_APPROVAL
+    assert any("primeiro trade" in r for r in verdict.reasons)
+    store.close()
+
+
+def test_pedido_pos_breaker_rejeitado_nao_desarma_regra_2(tmp_path):
+    # C2 (cenário 3 da revisão): a regra pós-breaker disparou (d1, sem
+    # fills_json — o dono rejeitou). O PRÓXIMO pedido depois do breaker
+    # tem que disparar a regra de novo — sem isto, um único pedido
+    # rejeitado/expirado logo após o breaker bastava para nunca mais
+    # exigir aprovação, furando a rede de segurança do /retomar.
+    store = SqliteStore(tmp_path / "a.db")
+    store.append_decision(_order_decision("d0", NOW - timedelta(days=2)))
+    record_halt_if_needed(store, HaltLevel.DAY, NOW - timedelta(days=1))
+    store.append_decision(DecisionRecord(
+        decision_id="d1", ts=NOW - timedelta(hours=1), inputs_hash="h",
+        snapshot_json="{}", proposal_json="{}",
+        verdict_json='{"status": "needs_approval", "reasons": []}',
+        order_json='{"symbol": "SOLUSDT"}'))  # rejeitado: sem fills_json
+    portfolio = PortfolioState(equity=10_000.0, cash=10_000.0)
+    verdict = apply_hitl_overrides(APPROVED, _proposal(), portfolio,
+                                   store, NOW)
+    assert verdict.status is VerdictStatus.NEEDS_APPROVAL
+    assert any("circuit breaker" in r for r in verdict.reasons)
     store.close()
 
 

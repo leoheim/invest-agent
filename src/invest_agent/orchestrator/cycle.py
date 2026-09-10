@@ -81,7 +81,8 @@ def _record(store: SqliteStore, decision_id: str, now: datetime,
 
 
 def _execute(store: SqliteStore, adapter, order: OrderIntent,
-             stop_loss_pct: float) -> bool:
+             stop_loss_pct: float) -> float:
+    """Retorna a quantidade de fato executada (0.0 = IOC sem fill)."""
     positions = store.get_positions()
     old = positions.get(order.symbol)
     if order.side == "SELL" and old and old[2]:
@@ -92,7 +93,7 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
     resp = adapter.place_limit_ioc(order)
     executed_qty = float(resp.get("executedQty", "0") or 0)
     if executed_qty <= 0:
-        return False
+        return 0.0
     quote = float(resp.get("cummulativeQuoteQty", "0") or 0)
     fill_price = quote / executed_qty if executed_qty else order.limit_price
     if order.side == "BUY":
@@ -129,7 +130,14 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
             adapter.place_stop_loss(order.symbol, remaining, stop_price,
                                     stop_id)
             store.upsert_position(order.symbol, remaining, avg, stop_id)
-    return True
+    return executed_qty
+
+
+def _record_fills(store: SqliteStore, decision_id: str, executed_qty: float,
+                  now: datetime) -> None:
+    store.set_decision_fills(decision_id, json.dumps(
+        {"executed_qty": executed_qty, "ts": now.isoformat()},
+        ensure_ascii=False))
 
 
 def _notify(notifier: Callable[[str], None] | None, text: str) -> None:
@@ -166,7 +174,7 @@ def _execute_approved(store: SqliteStore, adapter,
             continue
         order = OrderIntent(**json.loads(record.order_json))
         try:
-            executed = _execute(store, adapter, order, stop_loss_pct)
+            executed_qty = _execute(store, adapter, order, stop_loss_pct)
         except Exception as err:
             # CRITICAL: sem isto, a linha ficava 'approved' para sempre e o
             # próximo ciclo reenviaria a MESMA ordem (mesmo
@@ -179,10 +187,15 @@ def _execute_approved(store: SqliteStore, adapter,
                     f"⚠️ ordem aprovada {decision_id} falhou: "
                     f"{type(err).__name__} — não será re-tentada")
             raise
+        if executed_qty > 0:
+            # C2: só marca a decisão como EXECUTADA (fills_json) quando
+            # de fato houve fill — é isto que o HITL obrigatório passa a
+            # consultar para não desarmar em cima de mera intenção.
+            _record_fills(store, decision_id, executed_qty, now)
         store.set_pending_status(decision_id, "executed")
         _notify(notifier,
                 f"✅ ordem aprovada executada: {order.side} {order.qty:g} "
-                f"{order.symbol}" if executed else
+                f"{order.symbol}" if executed_qty > 0 else
                 f"⚠️ ordem aprovada {decision_id} não executou (IOC sem fill)")
 
 
@@ -272,9 +285,14 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
     if dry_run:
         return CycleResult(cid, verdict.status.value,
                            ["dry-run: ordem não enviada"], False)
-    executed = _execute(store, adapter, verdict.order,
-                        engine.profile.stop_loss_pct)
-    return CycleResult(cid, verdict.status.value, verdict.reasons, executed)
+    executed_qty = _execute(store, adapter, verdict.order,
+                            engine.profile.stop_loss_pct)
+    if executed_qty > 0:
+        # C2: marca a decisão como EXECUTADA — ver comentário equivalente
+        # em _execute_approved.
+        _record_fills(store, decision_id, executed_qty, now)
+    return CycleResult(cid, verdict.status.value, verdict.reasons,
+                       executed_qty > 0)
 
 
 def main(argv: list[str] | None = None) -> None:
