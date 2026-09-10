@@ -3,7 +3,7 @@ name = "invest-agent"
 version = "0.1.0"
 description = "Agente de investimento pessoal: LLM propõe, código dispõe"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["duckdb>=1.1", "pyarrow>=17"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
