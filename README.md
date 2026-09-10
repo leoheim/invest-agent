@@ -1,36 +1,74 @@
-# invest-agent
+# 🤖 invest-agent
 
-Agente de investimento pessoal: **o LLM propõe, código dispõe.**
+> **O LLM propõe, código dispõe.**
 
-Modelos Claude analisam mercado e notícias e produzem *propostas*
-(`Proposal`); um motor de regras determinístico (`RulesEngine`) valida
-cada proposta contra whitelist, sizing, exposição, frequência, circuit
-breakers e kill switch antes de qualquer ordem existir. O LLM nunca vê
-chave de API e nunca calcula tamanho de posição.
+Agente pessoal de investimento em cripto (Binance spot). Modelos Claude analisam
+mercado e notícias e produzem **propostas tipadas**; um **motor de regras
+determinístico** — Python puro, 100% testado, sem LLM — decide se a proposta
+vira ordem. O LLM nunca vê chave de API, nunca calcula tamanho de posição e
+enxerga o estado da conta apenas em modo leitura.
 
-- Spec: `docs/superpowers/specs/2026-09-05-invest-agent-design.md`
-- Pesquisa que fundamenta o design: `~/Documents/research/` (6 relatórios)
+```
+ notícias ─┐                                   ┌──────────────┐
+ candles ──┤   ┌─────────┐    Proposal    ┌────┴───────┐      │
+ macro ────┼──▶│ Claude  │──────────────▶│ RulesEngine │──▶ Verdict
+ posições ─┘   │ propõe  │  {ativo, ação, │  (código    │      │
+               └─────────┘   convicção}   │   dispõe)   │  APPROVED → ordem
+                                          └────┬────────┘  REJECTED → motivos
+                                               │            NEEDS_APPROVAL → Telegram
+                        whitelist · sizing · exposição · frequência
+                        qualidade de mercado · circuit breakers · kill switch
+```
 
-## Estado atual
+- 📄 **Spec:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
+- 🔬 **Pesquisa de fundamentação:** `~/Documents/research/` (6 relatórios, 2026-09-05)
 
-**Fase 0 concluída:** modelos de domínio + motor de regras completo,
-100% testado, zero rede/LLM. Próximas fases (spec §5): ingestão +
-backtest → paper trading (testnet Binance + Telegram + loop Claude) →
-live micro com R$ 1.000.
+## 🗺️ Fases de entrega
 
-## Rodar os testes
+| Fase | Conteúdo | Status |
+|:---:|---|:---:|
+| 0 | Motor de regras + testes; zero LLM, zero rede | ✅ concluída |
+| 1 | Ingestão de dados + backtest honesto vs buy-and-hold | 🚧 em andamento |
+| 2 | Paper trading (testnet Binance) + Telegram + loop Claude | ⬜ |
+| 3 | Live micro com R$ 1.000 | ⬜ |
+| 4 | Escala gradual; módulo de opções EUA (paper primeiro) | ⬜ |
 
-    python3 -m pip install pytest
-    python3 -m pytest -v
+## 🛡️ Perfil de risco ativo: moderado
 
-## Perfil de risco ativo: moderado
+| Regra | Valor |
+|---|---|
+| Máximo por ativo | 10% do capital |
+| Exposição total máxima | 60% investido |
+| Stop-loss | 5% em toda compra (OCO na exchange) |
+| Frequência | ≤ 4 ordens/dia · cooldown 4h por ativo |
+| Circuit breakers | halt a −5% dia · −10% semana · −15% mês |
+| Aprovação humana (HITL) | ordem > 2% do capital → Telegram |
+| Kill switch | arquivo fora do processo + dead-man switch |
 
-Máx 10% por ativo · máx 60% investido · stop-loss 5% em toda compra ·
-≤4 ordens/dia · cooldown 4h por ativo · halt a −5% dia / −10% semana /
-−15% mês · aprovação humana via Telegram acima de 2% do capital.
-Valores em `src/invest_agent/config.py` — só um humano edita.
+Valores em [`src/invest_agent/config.py`](src/invest_agent/config.py) — **só um humano edita.**
 
-## Limitações conhecidas (Fase 0)
+## 🧱 Estrutura
+
+```
+src/invest_agent/
+├── models.py      # Proposal, Verdict, OrderIntent, Position, MarketSnapshot
+├── config.py      # RiskProfile (perfil moderado — valores da spec)
+├── whitelist.py   # whitelist dinâmica: top-20 USDT por volume, sem stablecoins
+├── sizing.py      # sizing por código: convicção × tetos por ativo/total
+├── gates.py       # qualidade de mercado + anti-overtrading
+├── breakers.py    # circuit breakers de drawdown (dia/semana/mês)
+├── killswitch.py  # kill switch em arquivo + dead-man switch (falha fechado)
+└── engine.py      # RulesEngine: compõe tudo; proposta só vira ordem se TODOS passarem
+```
+
+## 🧪 Rodar os testes
+
+```bash
+python3 -m pip install pytest
+python3 -m pytest -v
+```
+
+## ⚠️ Limitações conhecidas (Fase 0)
 
 - **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
   avalia demais posições a avg_price (custo), não a preço de mercado.
