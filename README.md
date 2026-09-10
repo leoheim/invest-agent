@@ -28,10 +28,14 @@ enxerga o estado da conta apenas em modo leitura.
 | Fase | Conteúdo | Status |
 |:---:|---|:---:|
 | 0 | Motor de regras + testes; zero LLM, zero rede | ✅ concluída |
-| 1 | Ingestão de dados + backtest honesto vs buy-and-hold | 🚧 em andamento |
+| 1 | Ingestão de dados + backtest honesto vs buy-and-hold | ✅ código concluído¹ |
 | 2 | Paper trading (testnet Binance) + Telegram + loop Claude | ⬜ |
 | 3 | Live micro com R$ 1.000 | ⬜ |
 | 4 | Escala gradual; módulo de opções EUA (paper primeiro) | ⬜ |
+
+¹ Código da Fase 1 pronto e 100% testado; o *gate* da fase (rodar o backtest
+com dados reais e comparar com buy-and-hold) ainda precisa ser executado numa
+máquina com rede: `ingest` de candles → `backtest.run`.
 
 ## 🛡️ Perfil de risco ativo: moderado
 
