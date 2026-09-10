@@ -27,25 +27,28 @@ CANDLES = [
 # ENTER no candle 0, EXIT no candle 2:
 SIGNALS = [1, 0, -1, 0, 0]
 
+SIZE = round(9_900.0 / (100.0 * 1.05), 6)  # 94.285714
+
 
 def test_fill_na_abertura_seguinte_sem_look_ahead():
     zero = CostModel(fee_pct=0.0, slippage_pct=0.0)
     run = run_backtrader(CANDLES, SIGNALS, zero, initial_cash=10_000.0,
                          stake_pct=0.99)
     # sizing usa o CLOSE do candle do sinal (100) com margem de 5%:
-    # size = int(10000*0.99 / (100*1.05)) = 94 unidades
+    # size = round(10000*0.99 / (100*1.05), 6) = 94.285714 unidades (fracionário)
     # compra fill na abertura do candle 1 (102); venda na abertura do 3 (105)
-    # lucro = 94 * (105 - 102) = 282
+    # lucro = 94.285714 * (105 - 102) = 282.857142
     assert run.n_trades == 1
-    assert run.final_value == pytest.approx(10_000.0 + 94 * 3.0)
+    assert run.final_value == pytest.approx(10_000.0 + SIZE * 3.0)
 
 
 def test_comissao_percentual_reduz_o_resultado():
     costs = CostModel(fee_pct=0.001, slippage_pct=0.0)
     run = run_backtrader(CANDLES, SIGNALS, costs, initial_cash=10_000.0,
                          stake_pct=0.99)
-    # mesmas 94 unidades; comissões: 94*102*0.001 + 94*105*0.001
-    esperado = 10_000.0 + 94 * 3.0 - 94 * 102 * 0.001 - 94 * 105 * 0.001
+    # mesma quantidade fracionária; comissões: SIZE*102*0.001 + SIZE*105*0.001
+    esperado = (10_000.0 + SIZE * 3.0
+                - SIZE * 102 * 0.001 - SIZE * 105 * 0.001)
     assert run.final_value == pytest.approx(esperado)
 
 
@@ -53,9 +56,9 @@ def test_slippage_percentual_piora_os_fills():
     costs = CostModel(fee_pct=0.0, slippage_pct=0.01)
     run = run_backtrader(CANDLES, SIGNALS, costs, initial_cash=10_000.0,
                          stake_pct=0.99)
-    # sizing não muda (usa o close do sinal): 94 unidades
+    # sizing não muda (usa o close do sinal): SIZE fracionário
     # compra fill = 102*1.01 = 103.02; venda fill = 105*0.99 = 103.95
-    esperado = 10_000.0 + 94 * (105 * 0.99 - 102 * 1.01)
+    esperado = 10_000.0 + SIZE * (105 * 0.99 - 102 * 1.01)
     assert run.final_value == pytest.approx(esperado)
 
 
@@ -71,24 +74,29 @@ def test_posicao_aberta_no_fim_liquida_no_ultimo_close_com_custos():
     costs = CostModel(fee_pct=0.001, slippage_pct=0.0)
     run = run_backtrader(CANDLES, [1, 0, 0, 0, 0], costs,
                          initial_cash=10_000.0, stake_pct=0.99)
-    # mesmas 94 unidades; compra fill 102 (com comissão); sem EXIT, a
+    # mesma quantidade fracionária; compra fill 102 (com comissão); sem EXIT, a
     # posição é liquidada no ÚLTIMO close (109) com custo de saída —
     # espelha o fechamento forçado do sweep (Task 3)
-    esperado = (10_000.0 - 94 * 102 * 0.001 + 94 * (109 - 102)
-                - 94 * 109 * 0.001)
+    esperado = (10_000.0 - SIZE * 102 * 0.001 + SIZE * (109 - 102)
+                - SIZE * 109 * 0.001)
     assert run.final_value == pytest.approx(esperado)
     assert run.n_trades == 1
 
 
-def test_zero_sizing_levanta_erro_claro():
-    # Preço constante alto (100_000) e caixa baixo (10_000) resultam em
-    # size = int(9900 / (100_000 * 1.05)) = 0, que deve falhar alto
-    candles_caro = [
-        _candle(0, 100_000.0, 100_000.0),
-        _candle(1, 100_000.0, 100_000.0),
-    ]
-    signals = [1, 0]  # ENTER no candle 0
+def test_ativo_caro_agora_compra_fracao():
+    # antes: ValueError "caixa insuficiente"; agora compra fração
+    caros = [_candle(0, 100_000.0, 100_000.0),
+             _candle(1, 100_000.0, 100_000.0),
+             _candle(2, 100_000.0, 100_000.0)]
+    zero = CostModel(fee_pct=0.0, slippage_pct=0.0)
+    run = run_backtrader(caros, [1, 0, 0], zero, initial_cash=10_000.0)
+    assert run.n_trades == 1  # liquidação terminal conta o trade
+    assert run.final_value == pytest.approx(10_000.0)  # comprou e saiu no mesmo preço
+
+
+def test_caixa_infima_ainda_e_erro_claro():
+    caros = [_candle(0, 100_000.0, 100_000.0),
+             _candle(1, 100_000.0, 100_000.0)]
     zero = CostModel(fee_pct=0.0, slippage_pct=0.0)
     with pytest.raises(ValueError, match="caixa insuficiente"):
-        run_backtrader(candles_caro, signals, zero, initial_cash=10_000.0,
-                       stake_pct=0.99)
+        run_backtrader(caros, [1, 0], zero, initial_cash=0.00001)

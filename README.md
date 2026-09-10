@@ -146,12 +146,7 @@ ficam para a Fase 2.
 
 ### (Fase 1)
 
-- **Sizing em unidades inteiras:** backtest executa ordens com número inteiro
-  de unidades (`int(cash / (price * 1.05))`). Para ativos muito caros
-  (ex.: BTCUSDT ≥ 38.500), caixa de 10.000 USDT resulta em size = 0.
-  Aumente `--cash` para testar, ou use sizing fracionário (follow-up
-  documentado).
 - **Seleção in-sample:** o sweep escolhe os melhores parâmetros na mesma
   janela em que o veredito é calculado (otimismo por construção).
   Trate o resultado como triagem, não como validação out-of-sample;
-  validação cruzada fica para Fase 2.
+  use `--split 0.7` para validação honesta (Fase 2).

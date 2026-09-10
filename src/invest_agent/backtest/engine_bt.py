@@ -1,6 +1,7 @@
 """Estágio de fills realistas (spec §5): backtrader executa as ordens a
 mercado na ABERTURA do candle seguinte ao sinal — sem look-ahead e sem
 cheat-on-close. Comissão e slippage percentuais vêm do CostModel.
+Sizing fracionário (cripto é fracionária): size = round(cash / (price * 1.05), 6).
 Posição pendente ao final dos dados é liquidada no último close com
 custos de saída, espelhando o fechamento forçado do sweep (Task 3) — sem
 isso a comparação vs buy-and-hold subestimaria custos."""
@@ -66,7 +67,7 @@ class _SignalStrategy(bt.Strategy):
         if signal == Signal.ENTER and not self.position:
             cash = self.broker.getcash() * self.p.stake_pct
             price = self.data.close[0]
-            size = int(cash / (price * 1.05))  # margem p/ gap+slippage
+            size = round(cash / (price * 1.05), 6)  # fracionário — cripto é fracionária
             if size > 0:
                 self.buy(size=size)
             else:
@@ -103,9 +104,8 @@ def run_backtrader(candles: list[Candle], signals: list[int],
     n_trades = strat.closed_trades
     if n_trades == 0 and strat.zero_size_entries > 0:
         raise ValueError(
-            f"caixa insuficiente para 1 unidade ao preço atual — nenhum trade "
-            f"executado; aumente --cash (sizing fracionário é follow-up "
-            f"documentado)")
+            f"caixa insuficiente para fração mínima — nenhum trade "
+            f"executado; aumente --cash")
     final_value = cerebro.broker.getvalue()
     if strat.pending_size:  # posição ainda aberta ao final: liquida forçado
         final_value = cerebro.broker.getcash() + (
