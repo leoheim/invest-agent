@@ -22,12 +22,20 @@ def format_cycle_result(result: CycleResult,
                 f"{'; '.join(result.reasons)}")
     if result.verdict_status == "needs_approval":
         return f"⏳ ciclo {result.cycle_id}: ordem aguardando sua aprovação"
-    if result.executed and order is not None:
+    if result.executed:
+        if order is None:
+            # I1: o caminho direto (BUY/SELL aprovado sem HITL, executado
+            # no mesmo ciclo) não carrega a OrderIntent na CycleResult —
+            # sem este ramo, a mensagem caía em "sem ação (hold)" com
+            # dinheiro de fato movido.
+            return f"✅ ciclo {result.cycle_id}: ordem executada"
         return (f"✅ ciclo {result.cycle_id}: ordem executada — "
                 f"{order.side} {order.qty:g} {order.symbol} @ "
                 f"{order.limit_price:g}"
                 + (f" (stop {order.stop_loss_price:g})"
                    if order.stop_loss_price else ""))
+    if any("dry-run" in reason for reason in result.reasons):
+        return f"🧪 ciclo {result.cycle_id}: dry-run — ordem não enviada"
     return f"· ciclo {result.cycle_id}: sem ação (hold)"
 
 

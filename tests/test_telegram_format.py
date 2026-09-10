@@ -21,6 +21,25 @@ def test_format_cycle_result_executada():
     assert "BTCUSDT" in texto and "BUY" in texto and "executada" in texto
 
 
+def test_format_cycle_result_executada_sem_order_no_hand():
+    # I1: o caminho direto (BUY/SELL aprovado no mesmo ciclo, sem HITL)
+    # executa dentro de run_cycle e o main() chama format_cycle_result com
+    # order=None — sem este ramo, a mensagem caía em "sem ação (hold)" com
+    # uma ordem de fato executada.
+    result = CycleResult("2026091012", "approved", [], True)
+    texto = format_cycle_result(result, None)
+    assert "executada" in texto
+    assert "hold" not in texto
+
+
+def test_format_cycle_result_dry_run_e_distinto_do_hold():
+    result = CycleResult("2026091012", "approved",
+                         ["dry-run: ordem não enviada"], False)
+    texto = format_cycle_result(result, None)
+    assert "dry-run" in texto
+    assert "hold" not in texto
+
+
 def test_format_cycle_result_rejeitada_lista_motivos():
     result = CycleResult("2026091012", "rejected",
                          ["cooldown ativo", "spread alto"], False)
