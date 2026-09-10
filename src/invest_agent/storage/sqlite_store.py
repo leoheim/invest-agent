@@ -3,6 +3,7 @@ reservadas para a Fase 2), macro diário e o log de decisões APPEND-ONLY
 (triggers abortam UPDATE/DELETE; é a base de auditoria, debug e IR)."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -49,6 +50,33 @@ BEGIN SELECT RAISE(ABORT, 'decision_log é append-only'); END;
 CREATE TRIGGER IF NOT EXISTS decision_log_no_delete
 BEFORE DELETE ON decision_log
 BEGIN SELECT RAISE(ABORT, 'decision_log é append-only'); END;
+CREATE TABLE IF NOT EXISTS positions (
+    symbol TEXT PRIMARY KEY,
+    qty REAL NOT NULL,
+    avg_price REAL NOT NULL,
+    stop_order_id TEXT
+);
+CREATE TABLE IF NOT EXISTS equity_marks (
+    period TEXT PRIMARY KEY,
+    open_value REAL NOT NULL,
+    opened_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS halt_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    level TEXT NOT NULL,
+    set_at TEXT NOT NULL,
+    released INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS pending_approvals (
+    decision_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE TABLE IF NOT EXISTS api_costs (
+    date TEXT NOT NULL,
+    usd REAL NOT NULL
+);
 """
 
 
@@ -148,6 +176,120 @@ class SqliteStore:
                                order_json=r[6], fills_json=r[7],
                                api_cost_usd=r[8])
                 for r in rows]
+
+    # --- posições (a exchange é a verdade p/ qty; avg_price é nosso) ---
+
+    def upsert_position(self, symbol: str, qty: float, avg_price: float,
+                        stop_order_id: str | None = None) -> None:
+        self._con.execute(
+            "INSERT OR REPLACE INTO positions (symbol, qty, avg_price,"
+            " stop_order_id) VALUES (?,?,?,?)",
+            (symbol, qty, avg_price, stop_order_id))
+        self._con.commit()
+
+    def get_positions(self) -> dict[str, tuple[float, float, str | None]]:
+        rows = self._con.execute(
+            "SELECT symbol, qty, avg_price, stop_order_id"
+            " FROM positions").fetchall()
+        return {r[0]: (r[1], r[2], r[3]) for r in rows}
+
+    def delete_position(self, symbol: str) -> None:
+        self._con.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
+        self._con.commit()
+
+    # --- marks de equity ---
+
+    def set_mark(self, period: str, open_value: float,
+                 opened_at: datetime) -> None:
+        self._con.execute(
+            "INSERT OR REPLACE INTO equity_marks (period, open_value,"
+            " opened_at) VALUES (?,?,?)",
+            (period, open_value, opened_at.isoformat()))
+        self._con.commit()
+
+    def get_mark(self, period: str) -> tuple[float, datetime] | None:
+        row = self._con.execute(
+            "SELECT open_value, opened_at FROM equity_marks WHERE period=?",
+            (period,)).fetchone()
+        if row is None:
+            return None
+        return row[0], datetime.fromisoformat(row[1])
+
+    # --- halt persistente ---
+
+    def set_halt(self, level: str, set_at: datetime) -> None:
+        self._con.execute(
+            "INSERT OR REPLACE INTO halt_state (id, level, set_at, released)"
+            " VALUES (1, ?, ?, 0)", (level, set_at.isoformat()))
+        self._con.commit()
+
+    def get_halt(self) -> tuple[str, datetime, bool] | None:
+        row = self._con.execute(
+            "SELECT level, set_at, released FROM halt_state"
+            " WHERE id=1").fetchone()
+        if row is None:
+            return None
+        return row[0], datetime.fromisoformat(row[1]), bool(row[2])
+
+    def release_halt(self) -> None:
+        self._con.execute("UPDATE halt_state SET released=1 WHERE id=1")
+        self._con.commit()
+
+    # --- aprovações pendentes (HITL) ---
+
+    def add_pending(self, decision_id: str, created_at: datetime,
+                    expires_at: datetime) -> None:
+        self._con.execute(
+            "INSERT INTO pending_approvals (decision_id, created_at,"
+            " expires_at, status) VALUES (?,?,?,'pending')",
+            (decision_id, created_at.isoformat(), expires_at.isoformat()))
+        self._con.commit()
+
+    def get_pending(self) -> list[tuple[str, datetime, datetime, str]]:
+        rows = self._con.execute(
+            "SELECT decision_id, created_at, expires_at, status"
+            " FROM pending_approvals WHERE status='pending'"
+            " ORDER BY created_at").fetchall()
+        return [(r[0], datetime.fromisoformat(r[1]),
+                 datetime.fromisoformat(r[2]), r[3]) for r in rows]
+
+    def set_pending_status(self, decision_id: str, status: str) -> None:
+        self._con.execute(
+            "UPDATE pending_approvals SET status=? WHERE decision_id=?",
+            (status, decision_id))
+        self._con.commit()
+
+    # --- custo de API (breaker por custo diário) ---
+
+    def add_api_cost(self, day: date, usd: float) -> None:
+        self._con.execute("INSERT INTO api_costs (date, usd) VALUES (?,?)",
+                          (day.isoformat(), usd))
+        self._con.commit()
+
+    def api_cost_today(self, day: date) -> float:
+        (total,) = self._con.execute(
+            "SELECT COALESCE(SUM(usd), 0.0) FROM api_costs WHERE date=?",
+            (day.isoformat(),)).fetchone()
+        return total
+
+    # --- contadores derivados do decision_log ---
+
+    def count_orders_on(self, day: date) -> int:
+        (n,) = self._con.execute(
+            "SELECT COUNT(*) FROM decision_log WHERE order_json IS NOT NULL"
+            " AND substr(ts, 1, 10) = ?", (day.isoformat(),)).fetchone()
+        return n
+
+    def last_order_at_by_symbol(self) -> dict[str, datetime]:
+        rows = self._con.execute(
+            "SELECT ts, order_json FROM decision_log"
+            " WHERE order_json IS NOT NULL ORDER BY ts").fetchall()
+        out: dict[str, datetime] = {}
+        for ts, order_json in rows:
+            symbol = json.loads(order_json).get("symbol")
+            if symbol:
+                out[symbol] = datetime.fromisoformat(ts)
+        return out
 
 
 def _to_signed(value: int) -> int:
