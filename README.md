@@ -29,13 +29,17 @@ enxerga o estado da conta apenas em modo leitura.
 |:---:|---|:---:|
 | 0 | Motor de regras + testes; zero LLM, zero rede | ✅ concluída |
 | 1 | Ingestão de dados + backtest honesto vs buy-and-hold | ✅ código concluído¹ |
-| 2 | Paper trading (testnet Binance) + Telegram + loop Claude | ⬜ |
+| 2 | Paper trading (testnet Binance) + Telegram + loop Claude | ✅ código concluído² |
 | 3 | Live micro com R$ 1.000 | ⬜ |
 | 4 | Escala gradual; módulo de opções EUA (paper primeiro) | ⬜ |
 
 ¹ Código da Fase 1 pronto e 100% testado; o *gate* da fase (rodar o backtest
 com dados reais e comparar com buy-and-hold) ainda precisa ser executado numa
 máquina com rede: `ingest` de candles → `backtest.run`.
+
+² Código da Fase 2 pronto e 100% testado; gates operacionais (1-3 meses de
+paper trading na testnet, 30 dias sem incidente não tratado) ainda por
+cumprir antes da Fase 3 — ver [`docs/ops.md`](docs/ops.md).
 
 ## 🛡️ Perfil de risco ativo: moderado
 
@@ -137,6 +141,12 @@ estágios (URL canônica, SimHash de título) → SQLite (`data/agent.db`) com
 Greed, Selic e câmbio (BCB SGS). Dedupe por embedding e enriquecimento LLM
 ficam para a Fase 2.
 
+## 🧭 Operação
+
+Runbook completo de operação (VPS, credenciais, cron, systemd do bot,
+dead-man switch, comandos do Telegram, gates de transição entre fases e
+checklist testnet → live) em [`docs/ops.md`](docs/ops.md).
+
 ## ⚠️ Limitações conhecidas
 
 ### (Fase 0)
@@ -149,11 +159,6 @@ ficam para a Fase 2.
   unidirecional e permissivo em exposição. Em produção (Fase 1+), o
   orquestrador com market data completo recalculará antes de enviar à
   exchange.
-- **HITL de primeira entrada:** aprovação humana para primeiro trade em
-  ativo novo adiada para Fase 2 (o gatilho de 2% já cobre entradas com
-  conviction > 0.2).
-- **HITL pós-circuit-breaker:** aprovação humana para reentrada após
-  circuit breaker adiada para Fase 2.
 - **Gates em saídas:** saídas (SELL/CLOSE) ainda passam pelos gates de
   frequência, qualidade de mercado, circuit breakers e kill switch —
   comportamento fail-closed intencional na Fase 0; uma saída de
@@ -166,3 +171,14 @@ ficam para a Fase 2.
   janela em que o veredito é calculado (otimismo por construção).
   Trate o resultado como triagem, não como validação out-of-sample;
   use `--split 0.7` para validação honesta.
+
+### (Fase 2)
+
+- **Exchange filters não aplicados:** o adapter de execução não conhece
+  os filtros `LOT_SIZE`/`PRICE_FILTER`/`NOTIONAL` de `exchange_info` por
+  símbolo — uma ordem pode ser rejeitada pela exchange por precisão
+  inválida de quantidade/preço. Checklist e contorno manual em
+  [`docs/ops.md`](docs/ops.md#8-gates-das-fases-spec-5); aplicação
+  automática é melhoria futura. Débito técnico completo (reconcile-on-boot,
+  breaker de erro de tools, timeout do LLM etc.) documentado em
+  [`docs/ops.md`](docs/ops.md#10-débito-técnico-herdado-itens-conhecidos-não-bloqueantes-desta-fase).
