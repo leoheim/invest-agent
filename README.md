@@ -1,220 +1,260 @@
 # 🤖 invest-agent
 
-> **O LLM propõe, código dispõe.**
+> **The LLM proposes, the code disposes.**
 
 [![tests](https://github.com/leoheim/invest-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/leoheim/invest-agent/actions/workflows/tests.yml)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
-![testes](https://img.shields.io/badge/testes-277%20✓-brightgreen)
-![status](https://img.shields.io/badge/fase-paper%20trading%20(testnet)-orange)
+![tests](https://img.shields.io/badge/tests-277%20✓-brightgreen)
+![status](https://img.shields.io/badge/phase-paper%20trading%20(testnet)-orange)
 
-Agente pessoal de investimento em cripto (Binance spot). Modelos Claude analisam
-mercado e notícias e produzem **propostas tipadas**; um **motor de regras
-determinístico** — Python puro, 100% testado, sem LLM — decide se a proposta
-vira ordem. O LLM nunca vê chave de API, nunca calcula tamanho de posição e
-enxerga o estado da conta apenas em modo leitura.
+A personal crypto investing agent for Binance spot. Claude models read the
+market and the news and produce **typed proposals**; a **deterministic rules
+engine** — pure Python, 100% tested, no LLM — decides whether a proposal
+becomes an order. The LLM never sees an API key, never sizes a position, and
+only ever sees account state read-only.
 
 ```
- notícias ─┐                                   ┌──────────────┐
- candles ──┤   ┌─────────┐    Proposal    ┌────┴───────┐      │
- macro ────┼──▶│ Claude  │──────────────▶│ RulesEngine │──▶ Verdict
- posições ─┘   │ propõe  │  {ativo, ação, │  (código    │      │
-               └─────────┘   convicção}   │   dispõe)   │  APPROVED → ordem
-                                          └────┬────────┘  REJECTED → motivos
+ news ──────┐                                  ┌──────────────┐
+ candles ───┤   ┌─────────┐    Proposal   ┌────┴───────┐      │
+ macro ─────┼──▶│ Claude  │─────────────▶│ RulesEngine │──▶ Verdict
+ positions ─┘   │proposes │ {asset, side, │   (code     │      │
+                └─────────┘  conviction}  │  disposes)  │  APPROVED → order
+                                          └────┬────────┘  REJECTED → reasons
                                                │            NEEDS_APPROVAL → Telegram
-                        whitelist · sizing · exposição · frequência
-                        qualidade de mercado · circuit breakers · kill switch
+                         whitelist · sizing · exposure · frequency
+                         market quality · circuit breakers · kill switch
 ```
 
-- 📄 **Spec de design:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
-- 🧭 **Runbook de operação:** [`docs/ops.md`](docs/ops.md)
+## ⚠️ Disclaimer
 
-**Stack:** Python 3.12 · [backtrader](https://www.backtrader.com/) · [DuckDB](https://duckdb.org/) + Parquet · SQLite · [API da Claude](https://docs.claude.com) (Haiku 4.5 na triagem, Sonnet na proposta, Opus na revisão semanal via Batch) · Telegram Bot API em stdlib — 5 dependências de runtime, nenhum framework de agente.
+This is a **personal project for educational purposes**. It is not financial
+advice, and past backtest results guarantee nothing. Trading cryptocurrency
+carries substantial risk — **never risk money you cannot afford to lose**.
+The agent is designed to run for months on the Binance **testnet** (paper
+trading) before ever touching real funds, and even then starts with a
+micro-allocation. Use at your own risk; the author assumes no responsibility
+for your trading results. **Always start with `--dry-run`.**
 
-| | |
-|---|---|
-| 🛡️ [Perfil de risco](#%EF%B8%8F-perfil-de-risco-ativo-moderado) | tetos, breakers, kill switch — hardcoded, só humano edita |
-| 🧱 [Estrutura](#-estrutura) | motor de regras puro + camadas de dados/execução/cérebro |
-| 🧪 [Testes](#-rodar-os-testes) | 277 testes, zero rede/relógio/env — tudo injetável |
-| 🔁 [Ciclo do agente](#-ciclo-do-agente-fase-2--testnet) | dry-run → testnet → `--llm` com cérebro completo |
-| 🧭 [Operação](#-operação) | VPS, cron, systemd, dead-man switch, gates das fases |
+## ✨ Features
 
-## 🗺️ Fases de entrega
+- 🧮 **Deterministic rules engine** — whitelist, sizing, exposure caps,
+  frequency limits, market-quality gates, drawdown circuit breakers and a
+  file-based kill switch. Pure Python, zero network, zero LLM. A proposal
+  only becomes an order if **every** gate passes.
+- 🛡️ **Hard-coded risk profile** — position/exposure ceilings, stop-loss on
+  the exchange at entry, human approval above a threshold. Only a human
+  edits [`config.py`](src/invest_agent/config.py).
+- 🧠 **Claude brain, strictly sandboxed** — Haiku triages the whitelist
+  (≤3 candidates), Sonnet writes one typed proposal via structured outputs,
+  Opus reviews the week through the Batch API into versioned `learnings/`.
+  Any LLM failure (refusal, bad JSON, network) degrades to HOLD — the cycle
+  never crashes because of the model.
+- 🔒 **Fail-closed everywhere** — unknown order state is never retried
+  blindly; a tripped breaker halts new orders; stale candles reject the
+  cycle; approved-but-failed orders are never resubmitted automatically;
+  the kill switch gates even human-approved orders.
+- 📲 **Telegram as the control room** — push notifications for every cycle,
+  material news on held assets, inline Approve/Reject buttons with a TTL,
+  `/status`, `/pausar`, `/kill` and friends. Single authorized chat; the
+  bot token can never leak through an error message.
+- 👤 **Human-in-the-loop by design** — orders above 2% of capital, the first
+  trade in a new asset and the first order after a circuit breaker all
+  require explicit human approval, keyed on *executed* history.
+- 📊 **Honest backtesting** — parameter sweep in pure Python, realistic
+  fills in backtrader (next-candle open, fees + slippage), always compared
+  against buy-and-hold under the same costs, with `--split` for
+  out-of-sample validation. No LLM in backtests (old windows were in the
+  model's training data — "winning" there is look-ahead, not edge).
+- 🪶 **Small on purpose** — 5 runtime dependencies, no agent framework.
+  Every I/O boundary (HTTP, clock, env, LLM, exchange) is injectable, which
+  is why all 277 tests run in ~4s with **zero network access**.
 
-| Fase | Conteúdo | Status |
+**Stack:** Python 3.12 · [backtrader](https://www.backtrader.com/) ·
+[DuckDB](https://duckdb.org/) + Parquet · SQLite ·
+[Claude API](https://docs.claude.com) (Haiku 4.5 triage, Sonnet proposal,
+Opus weekly review via Batch) · Telegram Bot API over stdlib.
+
+- 📄 **Design spec:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
+- 🧭 **Operations runbook:** [`docs/ops.md`](docs/ops.md)
+
+## 🗺️ Delivery phases
+
+| Phase | Scope | Status |
 |:---:|---|:---:|
-| 0 | Motor de regras + testes; zero LLM, zero rede | ✅ concluída |
-| 1 | Ingestão de dados + backtest honesto vs buy-and-hold | ✅ código concluído¹ |
-| 2 | Paper trading (testnet Binance) + Telegram + loop Claude | ✅ código concluído² |
-| 3 | Live micro com R$ 1.000 | ⬜ |
-| 4 | Escala gradual; módulo de opções EUA (paper primeiro) | ⬜ |
+| 0 | Rules engine + tests; zero LLM, zero network | ✅ done |
+| 1 | Data ingestion + honest backtest vs buy-and-hold | ✅ code complete¹ |
+| 2 | Paper trading (Binance testnet) + Telegram + Claude loop | ✅ code complete² |
+| 3 | Live micro-allocation (R$ 1,000) | ⬜ |
+| 4 | Gradual scale-up; US options module (paper first) | ⬜ |
 
-¹ Código da Fase 1 pronto e 100% testado; o *gate* da fase (rodar o backtest
-com dados reais e comparar com buy-and-hold) ainda precisa ser executado numa
-máquina com rede: `ingest` de candles → `backtest.run`.
+¹ Phase 1 code is done and fully tested; the phase *gate* (run the backtest
+on real data and compare against buy-and-hold) still needs a networked
+machine: candle `ingest` → `backtest.run`.
 
-² Código da Fase 2 pronto e 100% testado; gates operacionais (1-3 meses de
-paper trading na testnet, 30 dias sem incidente não tratado) ainda por
-cumprir antes da Fase 3 — ver [`docs/ops.md`](docs/ops.md).
+² Phase 2 code is done and fully tested; the operational gates (1–3 months
+of paper trading on the testnet, 30 days without an unhandled incident)
+must be met before Phase 3 — see [`docs/ops.md`](docs/ops.md).
 
-## 🛡️ Perfil de risco ativo: moderado
+## 🛡️ Active risk profile: moderate
 
-| Regra | Valor |
+| Rule | Value |
 |---|---|
-| Máximo por ativo | 10% do capital |
-| Exposição total máxima | 60% investido |
-| Stop-loss | 5% em toda compra (STOP_LOSS_LIMIT na exchange) |
-| Frequência | ≤ 4 ordens/dia · cooldown 4h por ativo |
-| Circuit breakers | halt a −5% dia · −10% semana · −15% mês |
-| Aprovação humana (HITL) | ordem > 2% do capital → Telegram |
-| Kill switch | arquivo fora do processo + dead-man switch |
+| Max per asset | 10% of capital |
+| Max total exposure | 60% invested |
+| Stop-loss | 5% on every buy (STOP_LOSS_LIMIT on the exchange) |
+| Frequency | ≤ 4 orders/day · 4h cooldown per asset |
+| Circuit breakers | halt at −5% day · −10% week · −15% month |
+| Human approval (HITL) | order > 2% of capital → Telegram |
+| Kill switch | out-of-process file + dead-man switch |
 
-Valores em [`src/invest_agent/config.py`](src/invest_agent/config.py) — **só um humano edita.**
+Values live in [`src/invest_agent/config.py`](src/invest_agent/config.py) —
+**only a human edits them.**
 
-## 🧱 Estrutura
+## 🧱 Project layout
 
 ```
 src/invest_agent/
-│                        # ── Fase 0: motor de regras (Python puro, zero LLM, zero rede)
+│                        # ── Phase 0: rules engine (pure Python, zero LLM, zero network)
 ├── models.py            # Proposal, Verdict, OrderIntent, Position, MarketSnapshot
-├── config.py            # RiskProfile (perfil moderado — valores da spec)
-├── whitelist.py         # whitelist dinâmica: top-20 USDT por volume, sem stablecoins
-├── sizing.py            # sizing por código: convicção × tetos por ativo/total
-├── gates.py             # qualidade de mercado + anti-overtrading
-├── breakers.py          # circuit breakers de drawdown (dia/semana/mês)
-├── killswitch.py        # kill switch em arquivo + dead-man switch (falha fechado)
-├── engine.py            # RulesEngine: proposta só vira ordem se TODOS os gates passarem
-│                        # ── Fase 1: dados e validação
-├── data/                # candles Binance → Parquet mensal + DuckDB; stats p/ whitelist
-├── indicators.py        # RSI/SMA em Python puro
-├── backtest/            # sweep + backtrader com custos realistas vs buy-and-hold; --split
-├── news/                # RSS + Google News → triagem por keyword → dedupe URL/SimHash
-├── macro/               # Fear & Greed, Selic, câmbio (BCB SGS)
-├── storage/             # SQLite: decision log append-only, posições, halt, HITL, custos
-│                        # ── Fase 2: operação na testnet
-├── settings.py          # tudo por env; segredos nunca em logs (repr=False)
-├── execution/           # adapter Binance: HMAC, LIMIT IOC, stop na exchange, sem retry de POST
-├── orchestrator/        # ciclo horário: portfólio mark-to-market, snapshot, HITL duro
-├── brain/               # Claude: triagem Haiku → proposta Sonnet (structured outputs,
-│                        #   refusal = HOLD) → enriquecimento de notícias → revisão semanal Opus
-├── telegram/            # bot stdlib: push, /status, aprovação por botões com TTL
-└── jobs/                # whitelist semanal persistida
+├── config.py            # RiskProfile (moderate profile — values from the spec)
+├── whitelist.py         # dynamic whitelist: top-20 USDT pairs by volume, no stablecoins
+├── sizing.py            # sizing in code: conviction × per-asset/total ceilings
+├── gates.py             # market quality + anti-overtrading
+├── breakers.py          # drawdown circuit breakers (day/week/month)
+├── killswitch.py        # file-based kill switch + dead-man switch (fail-closed)
+├── engine.py            # RulesEngine: a proposal becomes an order only if ALL gates pass
+│                        # ── Phase 1: data & validation
+├── data/                # Binance candles → monthly Parquet + DuckDB; whitelist stats
+├── indicators.py        # RSI/SMA in pure Python
+├── backtest/            # sweep + backtrader with realistic costs vs buy-and-hold; --split
+├── news/                # RSS + Google News → keyword triage → URL/SimHash dedupe
+├── macro/               # Fear & Greed, Selic rate, FX (Brazilian Central Bank SGS)
+├── storage/             # SQLite: append-only decision log, positions, halts, HITL, costs
+│                        # ── Phase 2: testnet operation
+├── settings.py          # everything via env; secrets never in logs (repr=False)
+├── execution/           # Binance adapter: HMAC, LIMIT IOC, stop on exchange, no blind POST retry
+├── orchestrator/        # hourly cycle: mark-to-market portfolio, snapshot, hard HITL
+├── brain/               # Claude: Haiku triage → Sonnet proposal (structured outputs,
+│                        #   refusal = HOLD) → news enrichment → Opus weekly review
+├── telegram/            # stdlib bot: push, /status, button approvals with TTL
+└── jobs/                # weekly persisted whitelist
 ```
 
-46 arquivos de teste espelham essa árvore — **nenhum teste toca rede, relógio ou env**: transporte HTTP, clock e chaves são sempre injetáveis.
+46 test files mirror this tree — **no test touches the network, the clock or
+the environment**: HTTP transport, clock and keys are always injectable.
 
-## 🧪 Rodar os testes
+## 🧪 Running the tests
 
 ```bash
 python3 -m pip install -e . pytest
 python3 -m pytest
 ```
 
-277 testes em ~4s, sem nenhuma chamada externa — a mesma suíte roda no
-[CI](.github/workflows/tests.yml) a cada push.
+277 tests in ~4s with zero external calls — the same suite runs in
+[CI](.github/workflows/tests.yml) on every push.
 
-## 📥 Ingestão de candles (Fase 1)
+## 📥 Candle ingestion (Phase 1)
 
 ```bash
 python3 -m invest_agent.data.ingest --symbol BTCUSDT --interval 1h --since 2024-01-01
 ```
 
-Backfill histórico via [data.binance.vision](https://data.binance.vision)
-(grátis) + cauda recente via REST público. Idempotente: rodar de novo só
-baixa o que falta. Os dados ficam em `data/candles/` (fora do git),
-particionados em Parquet mensal e consultáveis com DuckDB.
+Historical backfill via [data.binance.vision](https://data.binance.vision)
+(free) + a recent tail over public REST. Idempotent: running again only
+downloads what's missing. Data lands in `data/candles/` (git-ignored) as
+monthly Parquet partitions, queryable with DuckDB.
 
-## 📊 Backtest vs buy-and-hold (Fase 1)
+## 📊 Backtest vs buy-and-hold (Phase 1)
 
 ```bash
 python3 -m invest_agent.backtest.run --symbol BTCUSDT --interval 1h --strategy sma_cross
-# Validação out-of-sample: treina no primeiro 70%, testa no restante
+# Out-of-sample validation: train on the first 70%, test on the rest
 python3 -m invest_agent.backtest.run --symbol BTCUSDT --interval 1h --strategy sma_cross --split 0.7
 ```
 
-Sweep de parâmetros em Python puro → fills realistas no backtrader (ordem
-executa na abertura do candle seguinte, comissão 0,10% + slippage 0,05%
-por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
-Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
-esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
-Use `--split` para validação honesta (treina no período inicial e testa no restante).
+Parameter sweep in pure Python → realistic fills in backtrader (orders
+execute at the next candle's open, 0.10% commission + 0.05% slippage per
+side) → a report comparing against buy-and-hold under identical costs.
+Mechanical strategies only — no LLM in backtests (an old window was already
+in the model's training data; an LLM "winning" there is look-ahead, not
+edge). Use `--split` for honest validation.
 
-## 🔁 Ciclo do agente (Fase 2 — testnet)
+## 🔁 Agent cycle (Phase 2 — testnet)
 
 ```bash
-export BINANCE_API_KEY=... BINANCE_API_SECRET=...   # chaves da TESTNET
+export BINANCE_API_KEY=... BINANCE_API_SECRET=...   # TESTNET keys
 python3 -m invest_agent.orchestrator.cycle --dry-run
 ```
 
-Um ciclo completo: heartbeat → halt/custo de API → carteira mark-to-market
-reconciliada da exchange → proposta (sem LLM por enquanto: proposer HOLD) →
-motor de regras → decision log append-only → ordem LIMIT IOC + stop-loss na
-exchange. Sem `--dry-run`, ordens aprovadas são enviadas à testnet.
+One full cycle: heartbeat → halt/API-cost gates → mark-to-market portfolio
+reconciled from the exchange → proposal (HOLD proposer without the LLM) →
+rules engine → append-only decision log → LIMIT IOC order + stop-loss on the
+exchange. Without `--dry-run`, approved orders are sent to the testnet.
 
-Com `--llm` (e `ANTHROPIC_API_KEY` configurada), o ciclo roda o cérebro
-completo — enriquecimento de notícias, triagem Haiku e proposta Sonnet —
-antes do motor de regras; sem a flag, o proposer é HOLD (dry-run operacional,
-comportamento padrão).
+With `--llm` (and `ANTHROPIC_API_KEY` set), the cycle runs the full brain —
+news enrichment, Haiku triage and a Sonnet proposal — before the rules
+engine; without the flag, the proposer is HOLD (operational dry-run, the
+default).
 
-Com `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` configurados, o ciclo empurra
-notificações para o dono via Telegram: resultado de cada ciclo, ordens de
-aprovação pendente (HITL) com botões inline "Aprovar"/"Rejeitar", e — com
-`--llm` — notícias materiais (materialidade ≥ 4) sobre ativos em carteira.
-Uma ordem aprovada pelo dono no bot não executa na hora: ela fica marcada
-`approved` no store e é enviada no ciclo seguinte, antes de qualquer nova
-proposta ser avaliada.
+With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` set, the cycle pushes
+notifications to the owner: every cycle result, pending-approval orders (HITL)
+with inline Approve/Reject buttons, and — with `--llm` — material news
+(materiality ≥ 4) about held assets. An order approved in the bot does not
+execute immediately: it is marked `approved` in the store and submitted at
+the start of the next cycle, before any new proposal is evaluated.
 
-## 📰 Ingestão de notícias e macro (Fase 1)
+## 📰 News & macro ingestion (Phase 1)
 
 ```bash
 python3 -m invest_agent.news.ingest --macro
 ```
 
-RSS (InfoMoney, Valor, MoneyTimes, CoinDesk, CoinTelegraph) + Google News
-RSS por ativo da whitelist (pt-BR, janela de 1 dia) → triagem por
-keyword (só o que cita ativos da whitelist ou temas macro) → dedupe em dois
-estágios (URL canônica, SimHash de título) → SQLite (`data/agent.db`) com
-`published_at` ≠ `ingested_at` (anti look-ahead). `--macro` adiciona Fear &
-Greed, Selic e câmbio (BCB SGS). Dedupe por embedding e enriquecimento LLM
-ficam para a Fase 2.
+RSS (InfoMoney, Valor, MoneyTimes, CoinDesk, CoinTelegraph) + per-asset
+Google News RSS (pt-BR, 1-day window) → keyword triage (only items citing
+whitelisted assets or macro themes) → two-stage dedupe (canonical URL,
+title SimHash) → SQLite (`data/agent.db`) with `published_at` ≠
+`ingested_at` (anti look-ahead). `--macro` adds Fear & Greed, the Selic
+rate and FX from the Brazilian Central Bank (SGS).
 
-## 🧭 Operação
+## 🧭 Operations
 
-Runbook completo de operação (VPS, credenciais, cron, systemd do bot,
-dead-man switch, comandos do Telegram, gates de transição entre fases e
-checklist testnet → live) em [`docs/ops.md`](docs/ops.md).
+The full operations runbook (VPS, credentials, cron, the bot's systemd
+unit, dead-man switch, Telegram commands, phase-transition gates and the
+testnet → live checklist) lives in [`docs/ops.md`](docs/ops.md).
 
-## ⚠️ Limitações conhecidas
+> **Note:** the agent speaks **Portuguese** to its owner — Telegram
+> messages, bot replies and decision-log reasons are pt-BR by design.
 
-### (Fase 0)
+## ⚠️ Known limitations
 
-- **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
-  avalia demais posições a avg_price (custo), não a preço de mercado.
-  Quando posições se valorizaram desde a entrada, isto SUBESTIMA o total
-  investido, podendo aprovar uma compra que faz a exposição real
-  (mark-to-market) ultrapassar silenciosamente o teto. O erro é
-  unidirecional e permissivo em exposição. Em produção (Fase 1+), o
-  orquestrador com market data completo recalculará antes de enviar à
-  exchange.
-- **Gates em saídas:** saídas (SELL/CLOSE) ainda passam pelos gates de
-  frequência, qualidade de mercado, circuit breakers e kill switch —
-  comportamento fail-closed intencional na Fase 0; uma saída de
-  de-risking pode ser atrasada por cooldown ou spread alto; revisitar
-  na Fase 1.
+### Phase 0
 
-### (Fase 1)
+- **Mark-to-market exposure:** the 60% invested ceiling inside the sizing
+  rule values existing positions at avg_price (cost), not market price.
+  When positions have appreciated, this UNDERSTATES total exposure and may
+  approve a buy that silently pushes real (mark-to-market) exposure past
+  the ceiling. The error is one-directional and permissive on exposure;
+  the orchestrator's mark-to-market equity (Phase 2) narrows the impact.
+- **Gates on exits:** SELL/CLOSE orders still pass through the frequency,
+  market-quality, circuit-breaker and kill-switch gates — intentionally
+  fail-closed; a de-risking exit can be delayed by a cooldown or a wide
+  spread.
 
-- **Seleção in-sample:** o sweep escolhe os melhores parâmetros na mesma
-  janela em que o veredito é calculado (otimismo por construção).
-  Trate o resultado como triagem, não como validação out-of-sample;
-  use `--split 0.7` para validação honesta.
+### Phase 1
 
-### (Fase 2)
+- **In-sample selection:** the sweep picks the best parameters in the same
+  window the verdict is computed on (optimistic by construction). Treat
+  the default report as screening, not validation; use `--split 0.7` for
+  honest out-of-sample validation.
 
-- **Exchange filters não aplicados:** o adapter de execução não conhece
-  os filtros `LOT_SIZE`/`PRICE_FILTER`/`NOTIONAL` de `exchange_info` por
-  símbolo — uma ordem pode ser rejeitada pela exchange por precisão
-  inválida de quantidade/preço. Checklist e contorno manual em
-  [`docs/ops.md`](docs/ops.md#8-gates-das-fases-spec-5); aplicação
-  automática é melhoria futura. Débito técnico completo (reconcile-on-boot,
-  breaker de erro de tools, timeout do LLM etc.) documentado em
-  [`docs/ops.md`](docs/ops.md#10-débito-técnico-herdado-itens-conhecidos-não-bloqueantes-desta-fase).
+### Phase 2
+
+- **Exchange filters not applied:** the execution adapter does not read
+  the per-symbol `LOT_SIZE`/`PRICE_FILTER`/`NOTIONAL` filters from
+  `exchange_info` — an order can be rejected by the exchange for invalid
+  quantity/price precision. Checklist and manual workaround in
+  [`docs/ops.md`](docs/ops.md#8-phase-gates-spec-5); automatic application
+  is a planned improvement. The complete technical-debt list
+  (reconcile-on-boot, tool-error-rate breaker, LLM client timeout, etc.)
+  is documented in
+  [`docs/ops.md`](docs/ops.md#10-inherited-technical-debt-known-non-blocking).
