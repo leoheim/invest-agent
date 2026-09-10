@@ -148,6 +148,10 @@ def _execute_approved(store: SqliteStore, adapter,
     if dry_run:
         return
     for decision_id in store.approved_pending():
+        if not store.claim_pending(decision_id):
+            # I2: outra execução (outro processo, ou um ciclo manual
+            # sobreposto ao cron) já reivindicou esta linha — não reenvia.
+            continue
         record = store.get_decision(decision_id)
         if record is None or not record.order_json:
             store.set_pending_status(decision_id, "executed")
@@ -200,8 +204,15 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
         return CycleResult(cid, "halted",
                            [f"halt {halt.name} ativo"], False, halt.name)
 
-    _execute_approved(store, adapter, notifier, dry_run,
-                      engine.profile.stop_loss_pct, now)
+    # C1: kill switch (/kill, /pausar, dead-man) tem que barrar até uma
+    # ordem JÁ APROVADA — sem este gate, ele só era consultado dentro de
+    # engine.evaluate (propostas novas), deixando o dono sem freio nenhum
+    # sobre uma aprovação pendente de execução. A linha fica 'approved',
+    # como no gate de halt; o resto do ciclo segue normal (engine.evaluate
+    # já rejeita propostas novas com o kill switch ativo).
+    if not engine.kill_switch.is_active():
+        _execute_approved(store, adapter, notifier, dry_run,
+                          engine.profile.stop_loss_pct, now)
 
     if store.api_cost_today(now.date()) >= settings.api_cost_daily_cap_usd:
         record_halt_if_needed(store, HaltLevel.DAY, now)

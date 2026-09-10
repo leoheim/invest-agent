@@ -343,6 +343,18 @@ class SqliteStore:
             " WHERE status='approved' ORDER BY created_at").fetchall()
         return [r[0] for r in rows]
 
+    def claim_pending(self, decision_id: str) -> bool:
+        """Reivindicação atômica (I2): duas execuções concorrentes de
+        _execute_approved para o mesmo decision_id não podem ambas enviar
+        a ordem. Só a primeira UPDATE que encontra status='approved' o
+        transiciona para 'executing' e ganha rowcount==1; a segunda encontra
+        0 linhas (já não está 'approved') e recua sem tocar o adapter."""
+        cur = self._con.execute(
+            "UPDATE pending_approvals SET status='executing'"
+            " WHERE decision_id=? AND status='approved'", (decision_id,))
+        self._con.commit()
+        return cur.rowcount == 1
+
     def get_decision(self, decision_id: str) -> DecisionRecord | None:
         row = self._con.execute(
             "SELECT decision_id, ts, inputs_hash, snapshot_json,"

@@ -33,3 +33,24 @@ def test_approved_pending_e_get_decision(tmp_path):
     store.set_pending_status("d1", "executed")
     assert store.approved_pending() == []
     store.close()
+
+
+def test_claim_pending_e_atomico(tmp_path):
+    # I2: só a primeira reivindicação de um decision_id 'approved' pode
+    # ganhar — a segunda (simulando um processo concorrente) tem que
+    # falhar, senão dois ciclos podem enviar a mesma ordem duas vezes.
+    store = SqliteStore(tmp_path / "a.db")
+    store.add_pending("d1", NOW, NOW)
+    store.set_pending_status("d1", "approved")
+    assert store.claim_pending("d1") is True
+    assert store.approved_pending() == []  # não está mais 'approved'
+    assert store.claim_pending("d1") is False  # 2a reivindicação falha
+    store.close()
+
+
+def test_claim_pending_recusa_id_inexistente_ou_nao_aprovado(tmp_path):
+    store = SqliteStore(tmp_path / "a.db")
+    assert store.claim_pending("nao-existe") is False
+    store.add_pending("d1", NOW, NOW)  # status='pending', não 'approved'
+    assert store.claim_pending("d1") is False
+    store.close()

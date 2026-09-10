@@ -623,3 +623,65 @@ def test_aprovada_com_mais_de_24h_expira_sem_executar(tmp_path):
     assert status == "expired"
     assert any("expirada" in a for a in avisos)
     store.close()
+
+
+def test_kill_switch_ativo_nao_executa_aprovada(tmp_path):
+    # C1: /kill, /pausar e o dead-man switch prometem parar TODA ordem
+    # nova — mas o kill switch só era consultado dentro de engine.evaluate
+    # (propostas novas), não antes de _execute_approved. Uma ordem já
+    # aprovada antes do kill ligar seguia sendo enviada no próximo ciclo.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
+
+    engine.kill_switch.activate("teste C1")
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+             NOW + timedelta(hours=1))
+    assert adapter.orders == []  # nada enviado — kill switch ativo
+    assert store.approved_pending() == [decision_id]  # continua approved
+
+    engine.kill_switch.deactivate()
+    run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+             NOW + timedelta(hours=2))
+    assert len(adapter.orders) == 1  # liberado — agora executa
+    assert store.get_pending() == []
+    store.close()
+
+
+def test_aprovada_ja_em_execucao_por_outro_processo_e_ignorada(tmp_path):
+    # I2: duas execuções concorrentes de _execute_approved (ex.: ciclo
+    # manual do runbook §7 sobreposto ao cron) não podem ambas enviar a
+    # mesma ordem aprovada. Simula uma reivindicação concorrente já em
+    # andamento (status 'executing') e verifica que este ciclo não a toca.
+    # A garantia atômica em si (só uma reivindicação vence) é testada
+    # diretamente em test_sqlite_whitelist.py::test_claim_pending_e_atomico.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
+    store._con.execute(
+        "UPDATE pending_approvals SET status='executing' WHERE decision_id=?",
+        (decision_id,))
+    store._con.commit()
+
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+             NOW + timedelta(hours=1))
+    assert adapter.orders == []  # nada enviado — já estava sendo processada
+    status = store._con.execute(
+        "SELECT status FROM pending_approvals WHERE decision_id=?",
+        (decision_id,)).fetchone()[0]
+    assert status == "executing"  # não foi tocada por este ciclo
+    store.close()
