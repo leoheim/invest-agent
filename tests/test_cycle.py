@@ -2,6 +2,8 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from invest_agent.config import MODERADO
 from invest_agent.data.models import Candle
 from invest_agent.data.store import CandleStore
@@ -172,4 +174,42 @@ def test_sell_cancela_stop_antigo_e_reduz_posicao(tmp_path):
     assert adapter.cancels == [("BTCUSDT", "ia-old-sl")]
     assert adapter.orders[0].side == "SELL"
     assert store.get_positions() == {}  # posição zerada
+    store.close()
+
+
+def test_sell_parcial_recoloca_stop_no_remanescente(tmp_path):
+    prop = Proposal(symbol="BTCUSDT", action=Action.CLOSE, conviction=0.5,
+                    rationale="x", cycle_id="2026091012")
+    adapter = FakeAdapter(balances={"USDT": 10_000.0, "BTC": 1.0},
+                         fill_qty=0.6)
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop, adapter=adapter)
+    store.upsert_position("BTCUSDT", 1.0, 90.0, "ia-old-sl")
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.executed is True
+    order = adapter.orders[0]
+    assert order.side == "SELL"
+    positions = store.get_positions()
+    assert "BTCUSDT" in positions  # remanescente continua com posição
+    qty, avg, stop_id = positions["BTCUSDT"]
+    assert qty == pytest.approx(0.4)
+    assert stop_id is not None and stop_id.endswith("-sl")
+    assert (order.symbol, pytest.approx(0.4),
+            pytest.approx(order.limit_price * 0.95), stop_id) in adapter.stops
+    store.close()
+
+
+def test_breaker_persiste_mesmo_em_ciclo_hold(tmp_path):
+    adapter = FakeAdapter(balances={"USDT": 8_000.0})  # queda de 20% → MONTH
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, adapter=adapter)
+    for period in ("day", "week", "month"):
+        store.set_mark(period, 10_000.0, NOW)  # mesmo dia — não rola
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.verdict_status == "approved"  # HOLD segue seu curso normal
+    halt = store.get_halt()
+    assert halt is not None and halt[0] == "MONTH"
+    result2 = run_cycle(store, cs, adapter, engine, proposer, settings,
+                        NOW + timedelta(hours=1))
+    assert result2.verdict_status == "halted"
     store.close()

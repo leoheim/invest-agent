@@ -66,7 +66,8 @@ def _record(store: SqliteStore, decision_id: str, now: datetime,
     ))
 
 
-def _execute(store: SqliteStore, adapter, order: OrderIntent) -> bool:
+def _execute(store: SqliteStore, adapter, order: OrderIntent,
+             stop_loss_pct: float) -> bool:
     positions = store.get_positions()
     old = positions.get(order.symbol)
     if order.side == "SELL" and old and old[2]:
@@ -93,8 +94,14 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent) -> bool:
         if remaining <= 1e-9:
             store.delete_position(order.symbol)
         else:
+            # fill parcial de IOC: o remanescente fica descoberto até
+            # recolocarmos o stop na exchange (ruling do controller).
+            stop_price = order.limit_price * (1 - stop_loss_pct)
+            stop_id = f"{order.client_order_id}-sl"
+            adapter.place_stop_loss(order.symbol, remaining, stop_price,
+                                    stop_id)
             store.upsert_position(order.symbol, remaining,
-                                  old[1] if old else fill_price, None)
+                                  old[1] if old else fill_price, stop_id)
     return True
 
 
@@ -121,6 +128,8 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
     prices = {symbol: adapter.get_price(symbol) for symbol in known}
     portfolio = build_portfolio(store, balances, prices, now)
     marks = ensure_marks(store, portfolio.equity, now)
+    record_halt_if_needed(
+        store, check_breakers(portfolio.equity, marks, engine.profile), now)
 
     whitelist = frozenset(engine.whitelist)
     candles_by_symbol = {
@@ -148,8 +157,6 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
         proposal.symbol, last, bid, ask,
         candles_by_symbol.get(proposal.symbol, []), now)
     verdict = engine.evaluate(proposal, portfolio, market, marks, now)
-    record_halt_if_needed(
-        store, check_breakers(portfolio.equity, marks, engine.profile), now)
     _record(store, decision_id, now, inputs_hash, context, proposal, verdict)
 
     if verdict.status is VerdictStatus.NEEDS_APPROVAL:
@@ -160,7 +167,8 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
     if dry_run:
         return CycleResult(cid, verdict.status.value,
                            ["dry-run: ordem não enviada"], False)
-    executed = _execute(store, adapter, verdict.order)
+    executed = _execute(store, adapter, verdict.order,
+                        engine.profile.stop_loss_pct)
     return CycleResult(cid, verdict.status.value, verdict.reasons, executed)
 
 
