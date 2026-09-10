@@ -73,10 +73,9 @@ def record_halt_if_needed(store: SqliteStore, level: HaltLevel,
                           now: datetime) -> None:
     if level is HaltLevel.NONE:
         return
-    current = store.get_halt()
-    if current is not None and not current[2]:
-        if _SEVERITY[HaltLevel[current[0]]] >= _SEVERITY[level]:
-            return
+    current = active_halt(store, now)
+    if _SEVERITY[current] >= _SEVERITY[level]:
+        return
     store.set_halt(level.name, now)
 
 

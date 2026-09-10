@@ -101,3 +101,13 @@ def test_halt_mais_severo_sobrescreve_mas_menos_severo_nao(tmp_path):
     record_halt_if_needed(store, HaltLevel.NONE, NOW)  # no-op
     assert active_halt(store, NOW) is HaltLevel.MONTH
     store.close()
+
+
+def test_halt_day_expirado_reengata_no_dia_seguinte(tmp_path):
+    store = SqliteStore(tmp_path / "a.db")
+    record_halt_if_needed(store, HaltLevel.DAY, NOW)          # quinta
+    amanha = NOW.replace(day=11)
+    assert active_halt(store, amanha) is HaltLevel.NONE       # expirou
+    record_halt_if_needed(store, HaltLevel.DAY, amanha)       # novo gatilho
+    assert active_halt(store, amanha) is HaltLevel.DAY        # re-engatou
+    store.close()
