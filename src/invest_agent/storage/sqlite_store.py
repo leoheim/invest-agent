@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS api_costs (
     date TEXT NOT NULL,
     usd REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS whitelist (
+    symbol TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_news_url ON news(url);
 CREATE INDEX IF NOT EXISTS idx_news_simhash ON news(simhash);
 CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_log(ts);
@@ -317,6 +321,42 @@ class SqliteStore:
             if symbol:
                 out[symbol] = datetime.fromisoformat(ts)
         return out
+
+    # --- whitelist persistida (job semanal, Fase 2c) ---
+
+    def set_whitelist(self, symbols, now: datetime) -> None:
+        self._con.execute("DELETE FROM whitelist")
+        self._con.executemany(
+            "INSERT INTO whitelist (symbol, updated_at) VALUES (?,?)",
+            [(s, now.isoformat()) for s in symbols])
+        self._con.commit()
+
+    def get_whitelist(self) -> frozenset[str]:
+        rows = self._con.execute("SELECT symbol FROM whitelist").fetchall()
+        return frozenset(r[0] for r in rows)
+
+    # --- aprovação HITL (Fase 2c) ---
+
+    def approved_pending(self) -> list[str]:
+        rows = self._con.execute(
+            "SELECT decision_id FROM pending_approvals"
+            " WHERE status='approved' ORDER BY created_at").fetchall()
+        return [r[0] for r in rows]
+
+    def get_decision(self, decision_id: str) -> DecisionRecord | None:
+        row = self._con.execute(
+            "SELECT decision_id, ts, inputs_hash, snapshot_json,"
+            " proposal_json, verdict_json, order_json, fills_json,"
+            " api_cost_usd FROM decision_log WHERE decision_id=?",
+            (decision_id,)).fetchone()
+        if row is None:
+            return None
+        return DecisionRecord(decision_id=row[0],
+                              ts=datetime.fromisoformat(row[1]),
+                              inputs_hash=row[2], snapshot_json=row[3],
+                              proposal_json=row[4], verdict_json=row[5],
+                              order_json=row[6], fills_json=row[7],
+                              api_cost_usd=row[8])
 
 
 def _to_signed(value: int) -> int:
