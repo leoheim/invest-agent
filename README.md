@@ -47,7 +47,7 @@ cumprir antes da Fase 3 — ver [`docs/ops.md`](docs/ops.md).
 |---|---|
 | Máximo por ativo | 10% do capital |
 | Exposição total máxima | 60% investido |
-| Stop-loss | 5% em toda compra (OCO na exchange) |
+| Stop-loss | 5% em toda compra (STOP_LOSS_LIMIT na exchange) |
 | Frequência | ≤ 4 ordens/dia · cooldown 4h por ativo |
 | Circuit breakers | halt a −5% dia · −10% semana · −15% mês |
 | Aprovação humana (HITL) | ordem > 2% do capital → Telegram |
