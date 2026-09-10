@@ -23,12 +23,16 @@ class FakeAdapter:
     sumir com o saldo preso num stop GTC) testável sem rede."""
 
     def __init__(self, price=100.0, bid=99.9, ask=100.0,
-                 balances=None, fill_qty=None, stop_loss_error=None):
+                 balances=None, fill_qty=None, fill_price=None,
+                 stop_loss_error=None):
         self.price, self.bid, self.ask = price, bid, ask
         balances = balances or {"USDT": 10_000.0}
         self._balances = {asset: [free, 0.0]
                           for asset, free in balances.items()}
         self.fill_qty = fill_qty
+        # I3: permite simular um IOC que preenche a um preço diferente do
+        # limite da ordem (drift entre a proposta e a execução real).
+        self.fill_price = fill_price
         self.stop_loss_error = stop_loss_error
         self.orders, self.stops, self.cancels = [], [], []
         self._locks = {}  # client_order_id -> (asset, qty travada)
@@ -47,7 +51,9 @@ class FakeAdapter:
     def place_limit_ioc(self, order):
         self.orders.append(order)
         qty = self.fill_qty if self.fill_qty is not None else order.qty
-        quote = qty * order.limit_price
+        price = (self.fill_price if self.fill_price is not None
+                 else order.limit_price)
+        quote = qty * price
         asset = order.symbol.removesuffix("USDT")
         base = self._balances.setdefault(asset, [0.0, 0.0])
         cash = self._balances.setdefault("USDT", [0.0, 0.0])
@@ -710,4 +716,25 @@ def test_buy_executado_grava_fills_json_na_decisao(tmp_path):
     assert rec.fills_json is not None
     fills = _json.loads(rec.fills_json)
     assert fills["executed_qty"] == pytest.approx(adapter.orders[0].qty)
+    store.close()
+
+
+def test_buy_com_drift_de_preco_usa_fill_para_o_stop(tmp_path):
+    # I3: uma ordem aprovada pode ser executada até 24h depois, a preço de
+    # mercado diferente do limite decidido na proposta. O stop tem que
+    # partir do preço de FILL real, não do limite obsoleto — senão pode
+    # nascer acima do mercado (após uma queda) e ser rejeitado na exchange.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    adapter = FakeAdapter(fill_price=90.0)  # proposta usa ask=100; fill a 90
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop, adapter=adapter)
+    _historical_order_decision(store)
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.executed is True
+    assert adapter.orders[0].limit_price == pytest.approx(100.0)
+    symbol, qty, stop_price, stop_id = adapter.stops[0]
+    assert stop_price == pytest.approx(90.0 * (1 - MODERADO.stop_loss_pct))
+    assert stop_price != pytest.approx(
+        adapter.orders[0].limit_price * (1 - MODERADO.stop_loss_pct))
     store.close()

@@ -112,8 +112,12 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
             except Exception:
                 pass  # stop pode já ter executado/expirado
         stop_id = f"{order.client_order_id}-sl"
-        adapter.place_stop_loss(order.symbol, new_qty,
-                                order.stop_loss_price, stop_id)
+        # I3: o stop parte do preço de FILL real, não do limite decidido há
+        # até 24h (caminho aprovado) — um stop calculado sobre um limite
+        # obsoleto pode nascer acima do mercado após uma queda e ser
+        # rejeitado pela exchange, deixando a posição sem proteção.
+        stop_price = fill_price * (1 - stop_loss_pct)
+        adapter.place_stop_loss(order.symbol, new_qty, stop_price, stop_id)
         store.upsert_position(order.symbol, new_qty, new_avg, stop_id)
     else:
         remaining = (old[0] if old else 0.0) - executed_qty
