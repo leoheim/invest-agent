@@ -83,7 +83,11 @@ class BinanceSpotAdapter:
                         "desconhecido; reconcilie com get_order") from err
                 raise BinanceAdapterError(
                     f"HTTP {err.code} em {method} {path}") from err
-            except urllib.error.URLError as err:
+            except OSError as err:
+                # URLError (falha de rede) e TimeoutError (timeout de
+                # leitura) são ambos OSError; urlopen NÃO embrulha o
+                # segundo em URLError, então um handler só de URLError o
+                # deixaria escapar cru, sem a dica de reconciliar.
                 if retry and attempt < attempts - 1:
                     self._sleep(delay)
                     delay *= 2

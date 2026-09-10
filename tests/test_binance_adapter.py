@@ -109,6 +109,23 @@ def test_post_nao_retenta_e_manda_reconciliar():
     assert len(tentativas) == 1  # NUNCA re-tenta POST
 
 
+def test_timeout_de_leitura_tambem_manda_reconciliar():
+    # TimeoutError não é URLError (urlopen não o embrulha), então precisa
+    # do próprio handler — senão escapa cru e perde a dica de reconciliar.
+    tentativas = []
+
+    def http(method, url, headers, body):
+        tentativas.append(1)
+        raise TimeoutError("timed out")
+
+    order = OrderIntent(symbol="BTCUSDT", side="BUY", qty=0.1,
+                        limit_price=50_000.0, stop_loss_price=None,
+                        client_order_id="ia-abc")
+    with pytest.raises(BinanceAdapterError, match="reconcilie"):
+        _adapter(http).place_limit_ioc(order)
+    assert len(tentativas) == 1  # POST não re-tenta nem em timeout
+
+
 def test_get_retenta_5xx_e_depois_sucede():
     tentativas = []
 
