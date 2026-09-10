@@ -1249,10 +1249,12 @@ git commit -m "feat: job semanal da whitelist persistida"
 3. **Bootstrap:** `python3 -m invest_agent.data.ingest --symbol ... --interval 1h --since ...` para cada símbolo da whitelist; `python3 -m invest_agent.jobs.whitelist`; `python3 -m invest_agent.news.ingest --macro`; primeiro ciclo com `--dry-run`.
 4. **Cron (exemplos literais):**
    ```cron
-   0 * * * *   cd /opt/invest-agent && python3 -m invest_agent.orchestrator.cycle --llm >> logs/cycle.log 2>&1
+   # ORDEM IMPORTA: candles aos :01 (vela da hora acabou de fechar), ciclo aos :05 —
+   # o gate de qualidade rejeita candle com mais de 600s (spec); fora dessa janela o ciclo reprova por dado velho.
+   1 * * * *   cd /opt/invest-agent && for s in $(python3 -c "from invest_agent.storage.sqlite_store import SqliteStore; s=SqliteStore('data/agent.db'); print(' '.join(sorted(s.get_whitelist()))); s.close()"); do python3 -m invest_agent.data.ingest --symbol $s --interval 1h; done >> logs/candles.log 2>&1
+   5 * * * *   cd /opt/invest-agent && python3 -m invest_agent.orchestrator.cycle --llm >> logs/cycle.log 2>&1
    */15 * * * * cd /opt/invest-agent && python3 -m invest_agent.news.ingest >> logs/news.log 2>&1
    10 6 * * *  cd /opt/invest-agent && python3 -m invest_agent.news.ingest --macro >> logs/macro.log 2>&1
-   30 5 * * *  cd /opt/invest-agent && for s in $(python3 -c "from invest_agent.storage.sqlite_store import SqliteStore; s=SqliteStore('data/agent.db'); print(' '.join(sorted(s.get_whitelist()))); s.close()"); do python3 -m invest_agent.data.ingest --symbol $s --interval 1h; done >> logs/candles.log 2>&1
    0 5 * * 1   cd /opt/invest-agent && python3 -m invest_agent.jobs.whitelist >> logs/whitelist.log 2>&1
    0 9 * * *   cd /opt/invest-agent && python3 -m invest_agent.telegram.bot --digest >> logs/digest.log 2>&1
    0 22 * * 0  cd /opt/invest-agent && python3 -m invest_agent.brain.weekly --submit >> logs/weekly.log 2>&1
