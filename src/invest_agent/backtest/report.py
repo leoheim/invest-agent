@@ -10,7 +10,8 @@ from .sweep import SweepResult
 
 def build_report(symbol: str, interval: str, params: dict,
                  run: BacktestRun, candles: list[Candle], costs: CostModel,
-                 sweep: list[SweepResult] | None = None) -> str:
+                 sweep: list[SweepResult] | None = None,
+                 out_of_sample: bool = False) -> str:
     strategy_return = run.final_value / run.initial_cash - 1
     baseline = buy_and_hold_return(candles[0].open, candles[-1].close, costs)
     drawdown = max_drawdown(run.equity_curve)
@@ -19,6 +20,11 @@ def build_report(symbol: str, interval: str, params: dict,
     veredito = ("SUPERA o buy-and-hold após custos"
                 if strategy_return > baseline
                 else "NÃO SUPERA o buy-and-hold após custos")
+
+    aviso = ("Validação out-of-sample: parâmetros escolhidos no treino; veredito no período de teste."
+             if out_of_sample
+             else "Aviso: parâmetros escolhidos in-sample (mesma janela do veredito) — resultado otimista; trate como triagem, não validação out-of-sample.")
+
     linhas = [
         f"# Backtest {symbol} {interval} — {periodo}",
         "",
@@ -31,7 +37,7 @@ def build_report(symbol: str, interval: str, params: dict,
         f"Trades fechados:       {run.n_trades}",
         "",
         f"Veredito: {veredito}",
-        "Aviso: parâmetros escolhidos in-sample (mesma janela do veredito) — resultado otimista; trate como triagem, não validação out-of-sample.",
+        aviso,
     ]
     if sweep:
         linhas += ["", "## Top do sweep (retorno bruto simulado)"]

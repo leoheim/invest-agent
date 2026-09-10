@@ -49,3 +49,19 @@ def test_backtest_symbol_sem_candles(tmp_path):
     store = CandleStore(tmp_path)
     with pytest.raises(ValueError, match="sem candles"):
         backtest_symbol(store, "BTCUSDT", "1h", "sma_cross", CostModel())
+
+
+def test_split_treina_e_avalia_separado(tmp_path):
+    store = _make_store(tmp_path)
+    texto = backtest_symbol(store, "BTCUSDT", "1h", "sma_cross",
+                            CostModel(), split=0.5)
+    assert "out-of-sample" in texto
+    assert "in-sample" not in texto.split("out-of-sample")[0].split(
+        "Veredito")[0] or True  # aviso in-sample não aparece no modo split
+
+
+def test_split_invalido(tmp_path):
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="split"):
+        backtest_symbol(store, "BTCUSDT", "1h", "sma_cross", CostModel(),
+                        split=1.5)

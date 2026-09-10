@@ -87,6 +87,8 @@ particionados em Parquet mensal e consultáveis com DuckDB.
 
 ```bash
 python3 -m invest_agent.backtest.run --symbol BTCUSDT --interval 1h --strategy sma_cross
+# Validação out-of-sample: treina no primeiro 70%, testa no restante
+python3 -m invest_agent.backtest.run --symbol BTCUSDT --interval 1h --strategy sma_cross --split 0.7
 ```
 
 Sweep de parâmetros em Python puro → fills realistas no backtrader (ordem
@@ -94,6 +96,7 @@ executa na abertura do candle seguinte, comissão 0,10% + slippage 0,05%
 por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
 Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
 esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
+Use `--split` para validação honesta (treina no período inicial e testa no restante).
 
 ## 🔁 Ciclo do agente (Fase 2 — testnet)
 

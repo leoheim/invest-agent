@@ -54,3 +54,12 @@ def test_report_inclui_drawdown_e_top_sweep():
                          CANDLES, ZERO, sweep=sweep)
     assert "25.00%" in texto            # drawdown (12000→9000)
     assert "+30.00%" in texto and "+10.00%" in texto  # linhas do sweep
+
+
+def test_report_out_of_sample_troca_o_aviso():
+    run = BacktestRun(initial_cash=10_000.0, final_value=10_500.0,
+                      n_trades=1, equity_curve=[10_000.0, 10_500.0])
+    texto = build_report("BTCUSDT", "1d", {}, run, CANDLES, ZERO,
+                         out_of_sample=True)
+    assert "out-of-sample" in texto
+    assert "resultado otimista" not in texto
