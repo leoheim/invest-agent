@@ -43,7 +43,7 @@ class TelegramClient:
         except Exception as err:
             raise TelegramError(
                 f"falha de transporte no método {method}: "
-                f"{type(err).__name__}") from err
+                f"{type(err).__name__}") from None
         if not data.get("ok"):
             raise TelegramError(
                 f"Bot API recusou {method}: {data.get('description', '?')}")
@@ -59,18 +59,23 @@ class TelegramClient:
             ]]}
         self._call("sendMessage", payload)
 
-    def get_updates(self, offset: int) -> list[dict]:
+    def get_updates(self, offset: int) -> tuple[list[dict], int]:
         data = self._call("getUpdates", None,
                           query=f"offset={offset}&timeout=25")
         out = []
+        max_update_id = None
         for update in data.get("result", []):
+            update_id = update.get("update_id")
+            if update_id is not None:
+                max_update_id = max(max_update_id or 0, update_id)
             message = update.get("message") or {}
             callback = update.get("callback_query") or {}
             chat = (message.get("chat")
                     or (callback.get("message") or {}).get("chat") or {})
             if str(chat.get("id")) == str(self.chat_id):
                 out.append(update)
-        return out
+        next_offset = (max_update_id + 1) if max_update_id is not None else offset
+        return out, next_offset
 
     def answer_callback(self, callback_id: str) -> None:
         self._call("answerCallbackQuery", {"callback_query_id": callback_id})

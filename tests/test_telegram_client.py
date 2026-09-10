@@ -50,10 +50,23 @@ def test_get_updates_filtra_chat_autorizado():
                                             "message": {"chat": {"id": 999}}}},
     ]}
     client, calls = _client([updates])
-    out = client.get_updates(offset=7)
+    out, next_offset = client.get_updates(offset=7)
     assert [u["update_id"] for u in out] == [1, 3]  # 999 ignorado
+    assert next_offset == 5  # max(1,2,3,4) + 1
     assert "offset=7" in calls[0][0] and "timeout=25" in calls[0][0]
     assert calls[0][1] is None  # GET
+
+
+def test_get_updates_todos_de_outro_chat():
+    updates = {"ok": True, "result": [
+        {"update_id": 10, "message": {"chat": {"id": 999}, "text": "/kill"}},
+        {"update_id": 11, "message": {"chat": {"id": 999}, "text": "hack"}},
+    ]}
+    client, calls = _client([updates])
+    out, next_offset = client.get_updates(offset=5)
+    assert out == []  # nenhum autorizado
+    assert next_offset == 12  # max(10, 11) + 1
+    assert "offset=5" in calls[0][0]
 
 
 def test_answer_callback():
@@ -75,3 +88,5 @@ def test_erro_de_transporte_nao_vaza_token():
     with pytest.raises(TelegramError) as err:
         client.send_message("x")
     assert TOKEN not in str(err.value)
+    assert err.value.__cause__ is None
+    assert err.value.__suppress_context__

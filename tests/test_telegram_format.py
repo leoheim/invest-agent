@@ -33,6 +33,18 @@ def test_format_cycle_result_hold_e_curto():
     assert len(format_cycle_result(result, None)) < 80
 
 
+def test_format_cycle_result_needs_approval():
+    result = CycleResult("2026091012", "needs_approval", ["acima do limiar"], False)
+    texto = format_cycle_result(result, None)
+    assert "aprovação" in texto
+
+
+def test_format_cycle_result_halted():
+    result = CycleResult("2026091012", "halted", ["drawdown mensal"], False)
+    texto = format_cycle_result(result, None)
+    assert "halt" in texto and "drawdown mensal" in texto
+
+
 def test_format_hitl_request():
     texto = format_hitl_request("d1", ORDER, ["acima do limiar"])
     assert "d1" in texto and "BTCUSDT" in texto and "acima do limiar" in texto
