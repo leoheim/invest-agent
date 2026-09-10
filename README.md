@@ -95,6 +95,18 @@ por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
 Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
 esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
 
+## 🔁 Ciclo do agente (Fase 2 — testnet)
+
+```bash
+export BINANCE_API_KEY=... BINANCE_API_SECRET=...   # chaves da TESTNET
+python3 -m invest_agent.orchestrator.cycle --dry-run
+```
+
+Um ciclo completo: heartbeat → halt/custo de API → carteira mark-to-market
+reconciliada da exchange → proposta (sem LLM por enquanto: proposer HOLD) →
+motor de regras → decision log append-only → ordem LIMIT IOC + stop-loss na
+exchange. Sem `--dry-run`, ordens aprovadas são enviadas à testnet.
+
 ## 📰 Ingestão de notícias e macro (Fase 1)
 
 ```bash
