@@ -81,6 +81,34 @@ Só depois de conferir a saída do `--dry-run` (proposta, veredito, motivos)
 
 ## 4. Cron
 
+Antes de ativar o cron, configure o caminho de busca e as variáveis de
+ambiente. Adicione ao topo do crontab (`crontab -e`):
+
+```bash
+PATH=/opt/invest-agent/.venv/bin:/usr/bin:/bin
+```
+
+Crie o wrapper de carregamento (`/opt/invest-agent/bin/with-env`, `chmod +x`):
+
+```bash
+#!/bin/sh
+set -a
+. /etc/invest-agent.env
+set +a
+exec "$@"
+```
+
+Cada comando do cron abaixo deve ser prefixado com esse wrapper. Exemplo (adaptado
+da linha de news do bloco abaixo):
+
+```bash
+*/15 * * * * cd /opt/invest-agent && /opt/invest-agent/bin/with-env python3 -m invest_agent.news.ingest >> logs/news.log 2>&1
+```
+
+Sem isso: `--llm` roda sem cérebro (ANTHROPIC_API_KEY vazia), a whitelist consulta a testnet (BINANCE_BASE_URL default) e o dead-man não consegue alertar no Telegram.
+
+Os comandos abaixo — copie-os para o crontab com o wrapper prefixado a cada linha:
+
 ```cron
 # ORDEM IMPORTA: candles aos :01 (vela da hora acabou de fechar), ciclo aos :05 —
 # o gate de qualidade rejeita candle com mais de 600s (spec); fora dessa janela o ciclo reprova por dado velho.
@@ -105,7 +133,14 @@ fazendo long-poll no `getUpdates` da Bot API.
 
 ## 5. systemd (bot Telegram)
 
-`/etc/systemd/system/invest-agent-bot.service`:
+Crie o usuário do sistema e ajuste permissões:
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/invest-agent invest-agent
+sudo chown -R invest-agent: /opt/invest-agent
+```
+
+Arquivo unit `/etc/systemd/system/invest-agent-bot.service`:
 
 ```ini
 [Unit]
