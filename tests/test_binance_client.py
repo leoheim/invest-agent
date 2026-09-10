@@ -93,3 +93,26 @@ def test_datetime_naive_e_rejeitado():
     client = BinanceMarketData(transport=lambda u: b"[]")
     with pytest.raises(ValueError):
         client.klines("BTCUSDT", "1h", start=datetime(2024, 1, 1))
+
+
+def test_urlerror_uma_vez_retenta():
+    calls, sleeps = [], []
+
+    def transport(url: str) -> bytes:
+        calls.append(url)
+        if len(calls) == 1:
+            raise urllib.error.URLError("connection reset")
+        return b"[]"
+
+    client = BinanceMarketData(transport=transport, sleeper=sleeps.append)
+    assert client.klines("BTCUSDT", "1h") == []
+    assert len(calls) == 2 and len(sleeps) == 1
+
+
+def test_urlerror_persistente_vira_binance_error():
+    def transport(url: str) -> bytes:
+        raise urllib.error.URLError("connection refused")
+
+    client = BinanceMarketData(transport=transport, sleeper=lambda s: None)
+    with pytest.raises(BinanceError):
+        client.klines("BTCUSDT", "1h")

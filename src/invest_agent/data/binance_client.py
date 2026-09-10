@@ -67,6 +67,13 @@ class BinanceMarketData:
                     delay *= 2
                     continue
                 raise BinanceError(f"HTTP {err.code} em {path}") from err
+            except urllib.error.URLError as err:
+                if attempt == _RETRIES - 1:
+                    raise BinanceError(
+                        f"falha de rede em {path} após {_RETRIES} tentativas: {err.reason}") from err
+                self._sleep(delay)
+                delay *= 2
+                continue
         raise AssertionError("inalcançável")
 
     def klines(self, symbol: str, interval: str,
