@@ -83,6 +83,17 @@ class FakeAdapter:
         return {}
 
 
+def _historical_order_decision(store, symbol="BTCUSDT", ts=None):
+    """Ajuste autorizado (ruling do controller): insere uma ordem antiga
+    para `symbol` no decision_log, para que a regra HITL de "primeiro
+    trade" (Task 4) não dispare em testes que já existiam antes dela."""
+    from invest_agent.storage.sqlite_store import DecisionRecord
+    store.append_decision(DecisionRecord(
+        decision_id=f"hist-{symbol}", ts=ts or (NOW - timedelta(days=3)),
+        inputs_hash="h", snapshot_json="{}", proposal_json="{}",
+        verdict_json="{}", order_json=f'{{"symbol": "{symbol}"}}'))
+
+
 def _fixture(tmp_path, proposal=None, adapter=None):
     store = SqliteStore(tmp_path / "a.db")
     candle_store = CandleStore(tmp_path / "candles")
@@ -127,6 +138,9 @@ def test_buy_pequeno_executa_e_poe_stop(tmp_path):
                     rationale="x", cycle_id="2026091012")
     store, cs, adapter, engine, proposer, settings = _fixture(
         tmp_path, proposal=prop)
+    # ajuste autorizado (Task 4 HITL duro): sem isto, o primeiro trade em
+    # BTCUSDT dispara "primeiro trade" e o veredito vira needs_approval.
+    _historical_order_decision(store)
     result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
     assert result.executed is True
     assert len(adapter.orders) == 1 and adapter.orders[0].side == "BUY"
@@ -186,11 +200,17 @@ def test_dry_run_nao_envia_ordem(tmp_path):
                     rationale="x", cycle_id="2026091012")
     store, cs, adapter, engine, proposer, settings = _fixture(
         tmp_path, proposal=prop)
+    # ajuste autorizado (Task 4 HITL duro): idem test_buy_pequeno... — sem
+    # histórico, o primeiro trade em BTCUSDT dispara needs_approval, o que
+    # preempta o próprio dry_run (a checagem de NEEDS_APPROVAL vem antes).
+    _historical_order_decision(store)
     result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW,
                        dry_run=True)
     assert result.verdict_status == "approved" and result.executed is False
     assert adapter.orders == []
-    (rec,) = store.read_decisions()
+    rec = store.read_decisions()[-1]  # a última é a deste ciclo (a 1a é o
+    # histórico inserido pelo ajuste HITL acima — read_decisions ordena por
+    # ts, e o histórico tem ts anterior a NOW)
     assert rec.order_json is not None  # a decisão fica registrada
     store.close()
 
@@ -257,6 +277,9 @@ def test_ciclo_apos_buy_com_stop_travado_nao_apaga_posicao_nem_halta(tmp_path):
                     rationale="x", cycle_id="2026091012")
     store, cs, adapter, engine, proposer, settings = _fixture(
         tmp_path, proposal=prop)
+    # ajuste autorizado (Task 4 HITL duro): idem test_buy_pequeno... — sem
+    # histórico, o primeiro trade em BTCUSDT dispara needs_approval.
+    _historical_order_decision(store)
     result1 = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
     assert result1.executed is True
     qty_bought = adapter.orders[0].qty
@@ -290,6 +313,11 @@ def test_buy_com_falha_no_stop_ainda_deixa_posicao_rastreada(tmp_path):
     adapter = FakeAdapter(stop_loss_error=RuntimeError("falha ao colocar stop"))
     store, cs, _, engine, proposer, settings = _fixture(
         tmp_path, proposal=prop, adapter=adapter)
+    # ajuste autorizado (Task 4 HITL duro): idem test_buy_pequeno... — sem
+    # histórico, o primeiro trade em BTCUSDT dispara needs_approval e o
+    # ciclo nunca chegaria em _execute (logo nunca levantaria o RuntimeError
+    # que este teste existe para verificar).
+    _historical_order_decision(store)
     with pytest.raises(RuntimeError):
         run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
     positions = store.get_positions()
@@ -362,6 +390,9 @@ def test_ciclo_com_llm_proposer_integrado(tmp_path):
                                usage=usage)
 
     store, cs, adapter, engine, _, settings = _fixture(tmp_path)
+    # ajuste autorizado (Task 4 HITL duro): idem test_buy_pequeno... — sem
+    # histórico, o primeiro trade em BTCUSDT dispara needs_approval.
+    _historical_order_decision(store)
     proposer = make_llm_proposer(LlmClient(create_fn=create_fn), store,
                                  lambda: NOW)
     result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
@@ -405,4 +436,55 @@ def test_llm_pre_gates_com_custo_no_teto_bloqueia(tmp_path):
     store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
     store.add_api_cost(NOW.date(), settings.api_cost_daily_cap_usd)
     assert llm_pre_gates(store, settings, NOW) is False
+    store.close()
+
+
+def test_hitl_primeiro_trade_downgrade_no_ciclo(tmp_path):
+    # BUY pequeno (0.019 → 19 USDT < 2%) seria APPROVED; mas é o primeiro
+    # trade do símbolo → NEEDS_APPROVAL via override
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.verdict_status == "needs_approval"
+    assert any("primeiro trade" in r for r in result.reasons)
+    assert adapter.orders == []
+    assert len(store.get_pending()) == 1
+    store.close()
+
+
+def test_aprovado_executa_no_ciclo_seguinte(tmp_path):
+    import json as _json
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    store.set_pending_status(pend[0], "approved")  # dono aprovou no bot
+    avisos = []
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    result = run_cycle(store, cs, adapter, engine, lambda ctx: hold,
+                       settings, NOW + timedelta(hours=1),
+                       notifier=avisos.append)
+    assert len(adapter.orders) == 1  # a ordem aprovada foi enviada
+    assert adapter.orders[0].client_order_id.endswith(
+        _json.loads(store.get_decision(pend[0]).order_json)[
+            "client_order_id"][-5:])
+    assert store.get_pending() == []  # virou executed
+    assert any("aprovada" in a for a in avisos)
+    store.close()
+
+
+def test_notifier_que_falha_nao_derruba_ciclo(tmp_path):
+    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+
+    def notifier_ruim(texto):
+        raise RuntimeError("telegram fora do ar")
+
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW,
+                       notifier=notifier_ruim)
+    assert result.verdict_status == "approved"  # ciclo completou
     store.close()

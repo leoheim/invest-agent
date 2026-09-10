@@ -11,6 +11,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from ..breakers import HaltLevel, check_breakers
 from ..config import MODERADO
@@ -21,6 +22,7 @@ from ..models import Action, OrderIntent, Proposal, Verdict, VerdictStatus
 from ..settings import Settings
 from ..storage.sqlite_store import DecisionRecord, SqliteStore
 from ..whitelist import ALWAYS_INCLUDED
+from .hitl import apply_hitl_overrides
 from .snapshot import (Proposer, build_context, build_market_snapshot,
                        context_hash, cycle_id, hold_proposer)
 from .state import (active_halt, build_portfolio, ensure_marks,
@@ -130,14 +132,46 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
     return True
 
 
+def _notify(notifier: Callable[[str], None] | None, text: str) -> None:
+    if notifier is None:
+        return
+    try:
+        notifier(text)
+    except Exception:
+        pass  # notificação nunca derruba o ciclo
+
+
+def _execute_approved(store: SqliteStore, adapter,
+                      notifier: Callable[[str], None] | None,
+                      dry_run: bool, stop_loss_pct: float) -> None:
+    if dry_run:
+        return
+    for decision_id in store.approved_pending():
+        record = store.get_decision(decision_id)
+        if record is None or not record.order_json:
+            store.set_pending_status(decision_id, "executed")
+            continue
+        order = OrderIntent(**json.loads(record.order_json))
+        executed = _execute(store, adapter, order, stop_loss_pct)
+        store.set_pending_status(decision_id, "executed")
+        _notify(notifier,
+                f"✅ ordem aprovada executada: {order.side} {order.qty:g} "
+                f"{order.symbol}" if executed else
+                f"⚠️ ordem aprovada {decision_id} não executou (IOC sem fill)")
+
+
 def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
               engine: RulesEngine, proposer: Proposer, settings: Settings,
               now: datetime, dry_run: bool = False,
-              news: list[tuple] = (), macro: dict[str, float] | None = None
-              ) -> CycleResult:
+              news: list[tuple] = (), macro: dict[str, float] | None = None,
+              notifier: Callable[[str], None] | None = None,
+              hitl_notifier: Callable[[str, OrderIntent, list[str]], None]
+              | None = None) -> CycleResult:
     cid = cycle_id(now)
     heartbeat_beat(settings.heartbeat_path, now)
     _expire_pending(store, now)
+    _execute_approved(store, adapter, notifier, dry_run,
+                      engine.profile.stop_loss_pct)
 
     halt = active_halt(store, now)
     if halt is not HaltLevel.NONE:
@@ -174,6 +208,8 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
             proposal, portfolio,
             build_market_snapshot(proposal.symbol, 0.0, 0.0, 0.0, [], now),
             marks, now)
+        verdict = apply_hitl_overrides(verdict, proposal, portfolio, store,
+                                       now)
         _record(store, decision_id, now, inputs_hash, context, proposal,
                 verdict)
         return CycleResult(cid, verdict.status.value, verdict.reasons, False)
@@ -184,10 +220,16 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
         proposal.symbol, last, bid, ask,
         candles_by_symbol.get(proposal.symbol, []), now)
     verdict = engine.evaluate(proposal, portfolio, market, marks, now)
+    verdict = apply_hitl_overrides(verdict, proposal, portfolio, store, now)
     _record(store, decision_id, now, inputs_hash, context, proposal, verdict)
 
     if verdict.status is VerdictStatus.NEEDS_APPROVAL:
         store.add_pending(decision_id, now, now + HITL_TTL)
+        if hitl_notifier is not None:
+            try:
+                hitl_notifier(decision_id, verdict.order, verdict.reasons)
+            except Exception:
+                pass  # notificação nunca derruba o ciclo
         return CycleResult(cid, verdict.status.value, verdict.reasons, False)
     if verdict.status is not VerdictStatus.APPROVED or verdict.order is None:
         return CycleResult(cid, verdict.status.value, verdict.reasons, False)
@@ -217,8 +259,24 @@ def main(argv: list[str] | None = None) -> None:
     adapter = BinanceSpotAdapter(settings.binance_api_key,
                                  settings.binance_api_secret,
                                  settings.binance_base_url)
-    engine = RulesEngine(MODERADO, ALWAYS_INCLUDED,
+    whitelist = store.get_whitelist() or ALWAYS_INCLUDED
+    engine = RulesEngine(MODERADO, whitelist,
                          KillSwitch(settings.kill_switch_path))
+
+    notifier = hitl_notifier = None
+    telegram = None
+    if settings.telegram_token and settings.telegram_chat_id:
+        from ..telegram.client import TelegramClient
+        from ..telegram.format import format_hitl_request
+        telegram = TelegramClient(settings.telegram_token,
+                                  settings.telegram_chat_id)
+        notifier = telegram.send_message
+
+        def hitl_notifier(decision_id, order, reasons):
+            telegram.send_message(
+                format_hitl_request(decision_id, order, reasons),
+                buttons=[("Aprovar", f"ap:{decision_id}"),
+                         ("Rejeitar", f"rj:{decision_id}")])
 
     news: list[tuple] = []
     macro: dict[str, float] = {}
@@ -237,13 +295,29 @@ def main(argv: list[str] | None = None) -> None:
             macro = {name: point.value
                      for name in ("fng", "selic", "cambio")
                      if (point := store.latest_macro(name)) is not None}
+            if telegram is not None:
+                positions = store.get_positions()
+                material = [n for n in news
+                           if n[5] is not None and n[5] >= 4
+                           and n[2] and n[2][0] in positions][:3]
+                for title, source, assets, _pub, _sent, materiality in material:
+                    from ..telegram.format import format_material_news
+                    _notify(notifier, format_material_news(
+                        title, source, assets[0], materiality))
 
     result = run_cycle(store, candle_store, adapter, engine, proposer,
                        settings, now, dry_run=args.dry_run,
-                       news=news, macro=macro)
+                       news=news, macro=macro, notifier=notifier,
+                       hitl_notifier=hitl_notifier)
     print(f"ciclo {result.cycle_id}: {result.verdict_status}"
           + (f" ({'; '.join(result.reasons)})" if result.reasons else "")
           + (" — ordem executada" if result.executed else ""))
+    if telegram is not None:
+        from ..telegram.format import format_cycle_result
+        # CycleResult não carrega a ordem executada; a mensagem detalhada
+        # de execução já é coberta pelos notifiers internos do ciclo
+        # (ordem aprovada executada / HITL). Aqui é só o resumo do status.
+        _notify(notifier, format_cycle_result(result, None))
     store.close()
 
 

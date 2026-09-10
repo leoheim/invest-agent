@@ -115,6 +115,14 @@ completo — enriquecimento de notícias, triagem Haiku e proposta Sonnet —
 antes do motor de regras; sem a flag, o proposer é HOLD (dry-run operacional,
 comportamento padrão).
 
+Com `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` configurados, o ciclo empurra
+notificações para o dono via Telegram: resultado de cada ciclo, ordens de
+aprovação pendente (HITL) com botões inline "Aprovar"/"Rejeitar", e — com
+`--llm` — notícias materiais (materialidade ≥ 4) sobre ativos em carteira.
+Uma ordem aprovada pelo dono no bot não executa na hora: ela fica marcada
+`approved` no store e é enviada no ciclo seguinte, antes de qualquer nova
+proposta ser avaliada.
+
 ## 📰 Ingestão de notícias e macro (Fase 1)
 
 ```bash
