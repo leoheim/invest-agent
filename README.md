@@ -68,6 +68,17 @@ python3 -m pip install pytest
 python3 -m pytest -v
 ```
 
+## 📥 Ingestão de candles (Fase 1)
+
+```bash
+python3 -m invest_agent.data.ingest --symbol BTCUSDT --interval 1h --since 2024-01-01
+```
+
+Backfill histórico via [data.binance.vision](https://data.binance.vision)
+(grátis) + cauda recente via REST público. Idempotente: rodar de novo só
+baixa o que falta. Os dados ficam em `data/candles/` (fora do git),
+particionados em Parquet mensal e consultáveis com DuckDB.
+
 ## ⚠️ Limitações conhecidas (Fase 0)
 
 - **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
