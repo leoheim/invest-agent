@@ -79,6 +79,18 @@ Backfill histórico via [data.binance.vision](https://data.binance.vision)
 baixa o que falta. Os dados ficam em `data/candles/` (fora do git),
 particionados em Parquet mensal e consultáveis com DuckDB.
 
+## 📊 Backtest vs buy-and-hold (Fase 1)
+
+```bash
+python3 -m invest_agent.backtest.run --symbol BTCUSDT --interval 1h --strategy sma_cross
+```
+
+Sweep de parâmetros em Python puro → fills realistas no backtrader (ordem
+executa na abertura do candle seguinte, comissão 0,10% + slippage 0,05%
+por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
+Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
+esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
+
 ## ⚠️ Limitações conhecidas (Fase 0)
 
 - **Exposição mark-to-market:** o teto de 60% investido na regra de sizing
