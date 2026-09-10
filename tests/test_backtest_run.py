@@ -56,8 +56,7 @@ def test_split_treina_e_avalia_separado(tmp_path):
     texto = backtest_symbol(store, "BTCUSDT", "1h", "sma_cross",
                             CostModel(), split=0.5)
     assert "out-of-sample" in texto
-    assert "in-sample" not in texto.split("out-of-sample")[0].split(
-        "Veredito")[0] or True  # aviso in-sample não aparece no modo split
+    assert "resultado otimista" not in texto  # aviso in-sample não aparece no modo split
 
 
 def test_split_invalido(tmp_path):
