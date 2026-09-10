@@ -1,6 +1,9 @@
 """Estágio de fills realistas (spec §5): backtrader executa as ordens a
 mercado na ABERTURA do candle seguinte ao sinal — sem look-ahead e sem
-cheat-on-close. Comissão e slippage percentuais vêm do CostModel."""
+cheat-on-close. Comissão e slippage percentuais vêm do CostModel.
+Posição pendente ao final dos dados é liquidada no último close com
+custos de saída, espelhando o fechamento forçado do sweep (Task 3) — sem
+isso a comparação vs buy-and-hold subestimaria custos."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -52,6 +55,8 @@ class _SignalStrategy(bt.Strategy):
         self._bar = 0
         self.closed_trades = 0
         self.equity_curve: list[float] = []
+        self.pending_size: int | None = None
+        self.pending_close: float | None = None
 
     def next(self):
         self.equity_curve.append(self.broker.getvalue())
@@ -70,6 +75,11 @@ class _SignalStrategy(bt.Strategy):
         if trade.isclosed:
             self.closed_trades += 1
 
+    def stop(self):
+        if self.position:
+            self.pending_size = self.position.size
+            self.pending_close = self.data.close[0]
+
 
 def run_backtrader(candles: list[Candle], signals: list[int],
                    costs: CostModel, initial_cash: float = 10_000.0,
@@ -87,7 +97,14 @@ def run_backtrader(candles: list[Candle], signals: list[int],
     cerebro.addstrategy(_SignalStrategy, signals=signals,
                         stake_pct=stake_pct)
     (strat,) = cerebro.run()
+    final_value = cerebro.broker.getvalue()
+    n_trades = strat.closed_trades
+    if strat.pending_size:  # posição ainda aberta ao final: liquida forçado
+        final_value = cerebro.broker.getcash() + (
+            strat.pending_size * costs.sell_price(strat.pending_close)
+            * (1 - costs.fee_pct))
+        n_trades += 1
     return BacktestRun(initial_cash=initial_cash,
-                       final_value=cerebro.broker.getvalue(),
-                       n_trades=strat.closed_trades,
+                       final_value=final_value,
+                       n_trades=n_trades,
                        equity_curve=strat.equity_curve)

@@ -64,3 +64,17 @@ def test_equity_curve_tem_um_ponto_por_candle():
     run = run_backtrader(CANDLES, SIGNALS, zero)
     assert len(run.equity_curve) == len(CANDLES)
     assert run.equity_curve[0] == pytest.approx(10_000.0)
+
+
+def test_posicao_aberta_no_fim_liquida_no_ultimo_close_com_custos():
+    # ENTER no candle 0, sem EXIT: a posição fica aberta até o fim dos dados
+    costs = CostModel(fee_pct=0.001, slippage_pct=0.0)
+    run = run_backtrader(CANDLES, [1, 0, 0, 0, 0], costs,
+                         initial_cash=10_000.0, stake_pct=0.99)
+    # mesmas 94 unidades; compra fill 102 (com comissão); sem EXIT, a
+    # posição é liquidada no ÚLTIMO close (109) com custo de saída —
+    # espelha o fechamento forçado do sweep (Task 3)
+    esperado = (10_000.0 - 94 * 102 * 0.001 + 94 * (109 - 102)
+                - 94 * 109 * 0.001)
+    assert run.final_value == pytest.approx(esperado)
+    assert run.n_trades == 1
