@@ -1,0 +1,13 @@
+[project]
+name = "invest-agent"
+version = "0.1.0"
+description = "Agente de investimento pessoal: LLM propõe, código dispõe"
+requires-python = ">=3.12"
+dependencies = ["duckdb>=1.1", "pyarrow>=17", "backtrader>=1.9.78", "anthropic>=0.40"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
