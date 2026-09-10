@@ -51,6 +51,26 @@ def _parse_iso(text: str | None) -> datetime | None:
         return None
 
 
+def _select_atom_link(entry: ET.Element, atom_ns: str) -> str:
+    """RFC 4287: prefere links com rel=alternate ou sem rel; fallback no primeiro."""
+    links = entry.findall(f"{atom_ns}link")
+    if not links:
+        return ""
+    # Prefer rel="alternate" or missing rel
+    for link_el in links:
+        rel = link_el.get("rel", "alternate")
+        if rel == "alternate":
+            href = link_el.get("href", "").strip()
+            if href:
+                return href
+    # Fallback: primeiro link existente
+    for link_el in links:
+        href = link_el.get("href", "").strip()
+        if href:
+            return href
+    return ""
+
+
 def parse_feed(xml_bytes: bytes, source: str, now: datetime) -> list[NewsItem]:
     """Aceita RSS 2.0 e Atom. Entradas sem título ou sem link são puladas;
     published_at=None quando ausente/imparseável (ingested_at é sempre now)."""
@@ -69,8 +89,7 @@ def parse_feed(xml_bytes: bytes, source: str, now: datetime) -> list[NewsItem]:
             now, item.findtext("description") or ""))
     for entry in root.iter(f"{_ATOM}entry"):  # Atom
         title = (entry.findtext(f"{_ATOM}title") or "").strip()
-        link_el = entry.find(f"{_ATOM}link")
-        link = (link_el.get("href") or "").strip() if link_el is not None else ""
+        link = _select_atom_link(entry, _ATOM)
         if not title or not link:
             continue
         published = (_parse_iso(entry.findtext(f"{_ATOM}published"))
