@@ -2,6 +2,11 @@
 
 > **O LLM propõe, código dispõe.**
 
+[![tests](https://github.com/leoheim/invest-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/leoheim/invest-agent/actions/workflows/tests.yml)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
+![testes](https://img.shields.io/badge/testes-277%20✓-brightgreen)
+![status](https://img.shields.io/badge/fase-paper%20trading%20(testnet)-orange)
+
 Agente pessoal de investimento em cripto (Binance spot). Modelos Claude analisam
 mercado e notícias e produzem **propostas tipadas**; um **motor de regras
 determinístico** — Python puro, 100% testado, sem LLM — decide se a proposta
@@ -20,8 +25,18 @@ enxerga o estado da conta apenas em modo leitura.
                         qualidade de mercado · circuit breakers · kill switch
 ```
 
-- 📄 **Spec:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
-- 🔬 **Pesquisa de fundamentação:** `~/Documents/research/` (6 relatórios, 2026-09-05)
+- 📄 **Spec de design:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
+- 🧭 **Runbook de operação:** [`docs/ops.md`](docs/ops.md)
+
+**Stack:** Python 3.12 · [backtrader](https://www.backtrader.com/) · [DuckDB](https://duckdb.org/) + Parquet · SQLite · [API da Claude](https://docs.claude.com) (Haiku 4.5 na triagem, Sonnet na proposta, Opus na revisão semanal via Batch) · Telegram Bot API em stdlib — 4 dependências de runtime, nenhum framework de agente.
+
+| | |
+|---|---|
+| 🛡️ [Perfil de risco](#%EF%B8%8F-perfil-de-risco-ativo-moderado) | tetos, breakers, kill switch — hardcoded, só humano edita |
+| 🧱 [Estrutura](#-estrutura) | motor de regras puro + camadas de dados/execução/cérebro |
+| 🧪 [Testes](#-rodar-os-testes) | 277 testes, zero rede/relógio/env — tudo injetável |
+| 🔁 [Ciclo do agente](#-ciclo-do-agente-fase-2--testnet) | dry-run → testnet → `--llm` com cérebro completo |
+| 🧭 [Operação](#-operação) | VPS, cron, systemd, dead-man switch, gates das fases |
 
 ## 🗺️ Fases de entrega
 
@@ -59,22 +74,43 @@ Valores em [`src/invest_agent/config.py`](src/invest_agent/config.py) — **só 
 
 ```
 src/invest_agent/
-├── models.py      # Proposal, Verdict, OrderIntent, Position, MarketSnapshot
-├── config.py      # RiskProfile (perfil moderado — valores da spec)
-├── whitelist.py   # whitelist dinâmica: top-20 USDT por volume, sem stablecoins
-├── sizing.py      # sizing por código: convicção × tetos por ativo/total
-├── gates.py       # qualidade de mercado + anti-overtrading
-├── breakers.py    # circuit breakers de drawdown (dia/semana/mês)
-├── killswitch.py  # kill switch em arquivo + dead-man switch (falha fechado)
-└── engine.py      # RulesEngine: compõe tudo; proposta só vira ordem se TODOS passarem
+│                        # ── Fase 0: motor de regras (Python puro, zero LLM, zero rede)
+├── models.py            # Proposal, Verdict, OrderIntent, Position, MarketSnapshot
+├── config.py            # RiskProfile (perfil moderado — valores da spec)
+├── whitelist.py         # whitelist dinâmica: top-20 USDT por volume, sem stablecoins
+├── sizing.py            # sizing por código: convicção × tetos por ativo/total
+├── gates.py             # qualidade de mercado + anti-overtrading
+├── breakers.py          # circuit breakers de drawdown (dia/semana/mês)
+├── killswitch.py        # kill switch em arquivo + dead-man switch (falha fechado)
+├── engine.py            # RulesEngine: proposta só vira ordem se TODOS os gates passarem
+│                        # ── Fase 1: dados e validação
+├── data/                # candles Binance → Parquet mensal + DuckDB; stats p/ whitelist
+├── indicators.py        # RSI/SMA em Python puro
+├── backtest/            # sweep + backtrader com custos realistas vs buy-and-hold; --split
+├── news/                # RSS + Google News → triagem por keyword → dedupe URL/SimHash
+├── macro/               # Fear & Greed, Selic, câmbio (BCB SGS)
+├── storage/             # SQLite: decision log append-only, posições, halt, HITL, custos
+│                        # ── Fase 2: operação na testnet
+├── settings.py          # tudo por env; segredos nunca em logs (repr=False)
+├── execution/           # adapter Binance: HMAC, LIMIT IOC, stop na exchange, sem retry de POST
+├── orchestrator/        # ciclo horário: portfólio mark-to-market, snapshot, HITL duro
+├── brain/               # Claude: triagem Haiku → proposta Sonnet (structured outputs,
+│                        #   refusal = HOLD) → enriquecimento de notícias → revisão semanal Opus
+├── telegram/            # bot stdlib: push, /status, aprovação por botões com TTL
+└── jobs/                # whitelist semanal persistida
 ```
+
+46 arquivos de teste espelham essa árvore — **nenhum teste toca rede, relógio ou env**: transporte HTTP, clock e chaves são sempre injetáveis.
 
 ## 🧪 Rodar os testes
 
 ```bash
-python3 -m pip install pytest
-python3 -m pytest -v
+python3 -m pip install -e . pytest
+python3 -m pytest
 ```
+
+277 testes em ~4s, sem nenhuma chamada externa — a mesma suíte roda no
+[CI](.github/workflows/tests.yml) a cada push.
 
 ## 📥 Ingestão de candles (Fase 1)
 
