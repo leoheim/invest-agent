@@ -11,8 +11,8 @@ from typing import Callable
 
 from ..storage.sqlite_store import SqliteStore
 from .canonical import is_near_duplicate, simhash64
-from .rss import FEEDS, parse_feed
-from .triage import triage
+from .rss import FEEDS, google_news_feed, parse_feed
+from .triage import ASSET_KEYWORDS, triage
 
 
 def ingest_news(store: SqliteStore, feeds: dict[str, str],
@@ -69,7 +69,10 @@ def main(argv: list[str] | None = None) -> None:
     args.db.parent.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(args.db)
     now = datetime.now(timezone.utc)  # borda de composição
-    stats = ingest_news(store, FEEDS, transport, now)
+    feeds = dict(FEEDS)
+    for symbol, words in ASSET_KEYWORDS.items():
+        feeds[f"gnews-{symbol.lower()}"] = google_news_feed(words[0])
+    stats = ingest_news(store, feeds, transport, now)
     print(f"notícias: {stats['inserted']} novas de {stats['fetched']} lidas "
           f"({stats['kept']} após triagem; dups: {stats['dup_url']} url, "
           f"{stats['dup_simhash']} simhash; feeds com falha: "

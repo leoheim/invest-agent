@@ -97,7 +97,8 @@ esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
 python3 -m invest_agent.news.ingest --macro
 ```
 
-RSS (InfoMoney, Valor, MoneyTimes, CoinDesk, CoinTelegraph) → triagem por
+RSS (InfoMoney, Valor, MoneyTimes, CoinDesk, CoinTelegraph) + Google News
+RSS por ativo da whitelist (pt-BR, janela de 1 dia) → triagem por
 keyword (só o que cita ativos da whitelist ou temas macro) → dedupe em dois
 estágios (URL canônica, SimHash de título) → SQLite (`data/agent.db`) com
 `published_at` ≠ `ingested_at` (anti look-ahead). `--macro` adiciona Fear &
