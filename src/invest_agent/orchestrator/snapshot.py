@@ -70,9 +70,10 @@ def build_context(portfolio: PortfolioState, whitelist: frozenset[str],
             for symbol, candles in sorted(candles_by_symbol.items())
         },
         "news": [
-            {"title": title, "source": source, "assets": sorted(assets),
-             "published_at": published_at}
-            for title, source, assets, published_at in news
+            {"title": n[0], "source": n[1], "assets": sorted(n[2]),
+             "published_at": n[3],
+             **({"sentiment": n[4], "materiality": n[5]} if len(n) > 4 else {})}
+            for n in news
         ],
         "macro": dict(sorted(macro.items())),
     }

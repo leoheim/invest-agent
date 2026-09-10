@@ -120,7 +120,9 @@ def _execute(store: SqliteStore, adapter, order: OrderIntent,
 
 def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
               engine: RulesEngine, proposer: Proposer, settings: Settings,
-              now: datetime, dry_run: bool = False) -> CycleResult:
+              now: datetime, dry_run: bool = False,
+              news: list[tuple] = (), macro: dict[str, float] | None = None
+              ) -> CycleResult:
     cid = cycle_id(now)
     heartbeat_beat(settings.heartbeat_path, now)
     _expire_pending(store, now)
@@ -149,7 +151,7 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
         s: candle_store.read(s, "1h", start=now - timedelta(days=7))
         for s in sorted(whitelist)}
     context = build_context(portfolio, whitelist, candles_by_symbol,
-                            news=[], macro={}, now=now)
+                            news=list(news), macro=dict(macro or {}), now=now)
     inputs_hash = context_hash(context)
 
     proposal = proposer(context)
@@ -189,6 +191,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Um ciclo do agente")
     parser.add_argument("--dry-run", action="store_true",
                         help="avalia e registra, mas não envia ordens")
+    parser.add_argument("--llm", action="store_true",
+                        help="usa o cérebro Claude (triagem + proposta)")
     args = parser.parse_args(argv)
 
     from ..execution.binance_adapter import BinanceSpotAdapter
@@ -203,8 +207,27 @@ def main(argv: list[str] | None = None) -> None:
                                  settings.binance_base_url)
     engine = RulesEngine(MODERADO, ALWAYS_INCLUDED,
                          KillSwitch(settings.kill_switch_path))
-    result = run_cycle(store, candle_store, adapter, engine, hold_proposer,
-                       settings, now, dry_run=args.dry_run)
+
+    news: list[tuple] = []
+    macro: dict[str, float] = {}
+    proposer = hold_proposer
+    if args.llm:
+        if not settings.anthropic_api_key:
+            raise SystemExit("ANTHROPIC_API_KEY ausente — necessário para --llm")
+        from ..brain.client import LlmClient
+        from ..brain.enrich import enrich_news
+        from ..brain.proposer import make_llm_proposer
+        client = LlmClient(api_key=settings.anthropic_api_key)
+        enrich_news(client, store, now)
+        proposer = make_llm_proposer(client, store, lambda: now)
+        news = store.recent_news(now - timedelta(hours=24))
+        macro = {name: point.value
+                 for name in ("fng", "selic", "cambio")
+                 if (point := store.latest_macro(name)) is not None}
+
+    result = run_cycle(store, candle_store, adapter, engine, proposer,
+                       settings, now, dry_run=args.dry_run,
+                       news=news, macro=macro)
     print(f"ciclo {result.cycle_id}: {result.verdict_status}"
           + (f" ({'; '.join(result.reasons)})" if result.reasons else "")
           + (" — ordem executada" if result.executed else ""))

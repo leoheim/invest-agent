@@ -110,6 +110,11 @@ reconciliada da exchange → proposta (sem LLM por enquanto: proposer HOLD) →
 motor de regras → decision log append-only → ordem LIMIT IOC + stop-loss na
 exchange. Sem `--dry-run`, ordens aprovadas são enviadas à testnet.
 
+Com `--llm` (e `ANTHROPIC_API_KEY` configurada), o ciclo roda o cérebro
+completo — enriquecimento de notícias, triagem Haiku e proposta Sonnet —
+antes do motor de regras; sem a flag, o proposer é HOLD (dry-run operacional,
+comportamento padrão).
+
 ## 📰 Ingestão de notícias e macro (Fase 1)
 
 ```bash

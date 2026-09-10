@@ -335,3 +335,52 @@ def test_buy_em_posicao_existente_cancela_stop_antigo_e_poe_um_novo(tmp_path):
     assert locked == pytest.approx(total_qty)
     assert free == pytest.approx(0.0)
     store.close()
+
+
+def test_ciclo_com_llm_proposer_integrado(tmp_path):
+    """Integração: proposer LLM fake propõe BUY pequeno → ciclo executa."""
+    import json as _json
+    from types import SimpleNamespace
+    from invest_agent.brain.client import LlmClient
+    from invest_agent.brain.proposer import make_llm_proposer
+
+    respostas = [
+        {"candidates": [{"symbol": "BTCUSDT", "reason": "r"}]},
+        {"symbol": "BTCUSDT", "action": "buy", "conviction": 0.019,
+         "rationale": "sinal", "urgency": "baixa"},
+    ]
+    state = {"i": 0}
+
+    def create_fn(**kwargs):
+        payload = respostas[state["i"]]
+        state["i"] += 1
+        usage = SimpleNamespace(input_tokens=100, output_tokens=50,
+                                cache_read_input_tokens=0,
+                                cache_creation_input_tokens=0)
+        block = SimpleNamespace(type="text", text=_json.dumps(payload))
+        return SimpleNamespace(content=[block], stop_reason="end_turn",
+                               usage=usage)
+
+    store, cs, adapter, engine, _, settings = _fixture(tmp_path)
+    proposer = make_llm_proposer(LlmClient(create_fn=create_fn), store,
+                                 lambda: NOW)
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    assert result.executed is True
+    assert store.api_cost_today(NOW.date()) > 0
+    store.close()
+
+
+def test_ciclo_passa_news_e_macro_ao_contexto(tmp_path):
+    """O contexto registrado no decision_log carrega news e macro."""
+    import json as _json
+    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+    news = [("Bitcoin sobe", "coindesk", ("BTCUSDT",),
+             "2026-09-10T10:00:00+00:00", "positivo", 4)]
+    macro = {"fng": 34.0}
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW,
+              news=news, macro=macro)
+    (rec,) = store.read_decisions()
+    snapshot = _json.loads(rec.snapshot_json)
+    assert snapshot["news"][0]["title"] == "Bitcoin sobe"
+    assert snapshot["macro"]["fng"] == 34.0
+    store.close()
