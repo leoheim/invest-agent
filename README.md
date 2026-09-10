@@ -152,4 +152,4 @@ ficam para a Fase 2.
 - **Seleção in-sample:** o sweep escolhe os melhores parâmetros na mesma
   janela em que o veredito é calculado (otimismo por construção).
   Trate o resultado como triagem, não como validação out-of-sample;
-  use `--split 0.7` para validação honesta (Fase 2).
+  use `--split 0.7` para validação honesta.
