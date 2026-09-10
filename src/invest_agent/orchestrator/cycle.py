@@ -38,6 +38,18 @@ class CycleResult:
     halted: str | None = None
 
 
+def llm_pre_gates(store: SqliteStore, settings: Settings, now: datetime) -> bool:
+    """Espelha EXATAMENTE os gates de halt/custo que run_cycle já checa —
+    defesa na borda de composição (I1): sem isso, o enriquecimento de
+    notícias em main() gastaria API mesmo com o breaker de custo ou um
+    halt já ativos, invertendo a semântica fail-closed do breaker."""
+    if active_halt(store, now) is not HaltLevel.NONE:
+        return False
+    if store.api_cost_today(now.date()) >= settings.api_cost_daily_cap_usd:
+        return False
+    return True
+
+
 def _expire_pending(store: SqliteStore, now: datetime) -> None:
     for decision_id, _, expires_at, _ in store.get_pending():
         if expires_at < now:
@@ -218,12 +230,13 @@ def main(argv: list[str] | None = None) -> None:
         from ..brain.enrich import enrich_news
         from ..brain.proposer import make_llm_proposer
         client = LlmClient(api_key=settings.anthropic_api_key)
-        enrich_news(client, store, now)
-        proposer = make_llm_proposer(client, store, lambda: now)
-        news = store.recent_news(now - timedelta(hours=24))
-        macro = {name: point.value
-                 for name in ("fng", "selic", "cambio")
-                 if (point := store.latest_macro(name)) is not None}
+        if llm_pre_gates(store, settings, now):
+            enrich_news(client, store, now)
+            proposer = make_llm_proposer(client, store, lambda: now)
+            news = store.recent_news(now - timedelta(hours=24))
+            macro = {name: point.value
+                     for name in ("fng", "selic", "cambio")
+                     if (point := store.latest_macro(name)) is not None}
 
     result = run_cycle(store, candle_store, adapter, engine, proposer,
                        settings, now, dry_run=args.dry_run,

@@ -9,7 +9,7 @@ from invest_agent.data.store import CandleStore
 from invest_agent.engine import RulesEngine
 from invest_agent.killswitch import KillSwitch
 from invest_agent.models import Action, Proposal
-from invest_agent.orchestrator.cycle import CycleResult, run_cycle
+from invest_agent.orchestrator.cycle import CycleResult, llm_pre_gates, run_cycle
 from invest_agent.settings import Settings
 from invest_agent.storage.sqlite_store import SqliteStore
 
@@ -383,4 +383,26 @@ def test_ciclo_passa_news_e_macro_ao_contexto(tmp_path):
     snapshot = _json.loads(rec.snapshot_json)
     assert snapshot["news"][0]["title"] == "Bitcoin sobe"
     assert snapshot["macro"]["fng"] == 34.0
+    store.close()
+
+
+def test_llm_pre_gates_normal_libera_gasto(tmp_path):
+    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+    assert llm_pre_gates(store, settings, NOW) is True
+    store.close()
+
+
+def test_llm_pre_gates_com_halt_ativo_bloqueia(tmp_path):
+    from invest_agent.breakers import HaltLevel
+    from invest_agent.orchestrator.state import record_halt_if_needed
+    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+    record_halt_if_needed(store, HaltLevel.MONTH, NOW)
+    assert llm_pre_gates(store, settings, NOW) is False
+    store.close()
+
+
+def test_llm_pre_gates_com_custo_no_teto_bloqueia(tmp_path):
+    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+    store.add_api_cost(NOW.date(), settings.api_cost_daily_cap_usd)
+    assert llm_pre_gates(store, settings, NOW) is False
     store.close()
