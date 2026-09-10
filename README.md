@@ -91,6 +91,19 @@ por lado) → relatório comparando com buy-and-hold sob os mesmos custos.
 Estratégias mecânicas apenas — sem LLM em backtest (janela antiga já
 esteve no treino do modelo; um LLM "acertando" ali é look-ahead, não edge).
 
+## 📰 Ingestão de notícias e macro (Fase 1)
+
+```bash
+python3 -m invest_agent.news.ingest --macro
+```
+
+RSS (InfoMoney, Valor, MoneyTimes, CoinDesk, CoinTelegraph) → triagem por
+keyword (só o que cita ativos da whitelist ou temas macro) → dedupe em dois
+estágios (URL canônica, SimHash de título) → SQLite (`data/agent.db`) com
+`published_at` ≠ `ingested_at` (anti look-ahead). `--macro` adiciona Fear &
+Greed, Selic e câmbio (BCB SGS). Dedupe por embedding e enriquecimento LLM
+ficam para a Fase 2.
+
 ## ⚠️ Limitações conhecidas
 
 ### (Fase 0)
