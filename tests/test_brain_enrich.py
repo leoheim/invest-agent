@@ -72,6 +72,20 @@ def test_enrich_refusal_mantem_pendentes(tmp_path):
     store.close()
 
 
+def test_enrich_erro_de_rede_mantem_pendentes(tmp_path):
+    store = SqliteStore(tmp_path / "a.db")
+    _insert(store, "t", "https://x.com/1")
+
+    def explode(**kwargs):
+        raise RuntimeError("rede caiu")
+
+    stats = enrich_news(LlmClient(create_fn=explode), store, NOW)
+    assert stats == {"pending": 1, "enriched": 0, "cost_usd": 0.0}
+    assert len(store.unenriched_news()) == 1
+    assert store.api_cost_today(NOW.date()) == 0.0
+    store.close()
+
+
 def test_schema_estrito():
     item = ENRICH_SCHEMA["properties"]["items"]["items"]
     assert item["properties"]["sentiment"]["enum"] == [

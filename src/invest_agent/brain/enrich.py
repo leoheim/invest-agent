@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..storage.sqlite_store import SqliteStore
-from .client import LlmClient
+from .client import LlmClient, LlmError
 
 ENRICH_MODEL = "claude-haiku-4-5"
 
@@ -54,8 +54,11 @@ def enrich_news(client: LlmClient, store: SqliteStore, now: datetime,
         {"id": news_id, "titulo": title, "resumo_bruto": summary}
         for news_id, title, summary in pending
     ]}
-    data, cost = client.structured(ENRICH_MODEL, ENRICH_SYSTEM, payload,
-                                   ENRICH_SCHEMA, max_tokens=4000)
+    try:
+        data, cost = client.structured(ENRICH_MODEL, ENRICH_SYSTEM, payload,
+                                       ENRICH_SCHEMA, max_tokens=4000)
+    except LlmError:
+        return {"pending": len(pending), "enriched": 0, "cost_usd": 0.0}
     if cost > 0:
         store.add_api_cost(now.date(), cost)
     if not data:
