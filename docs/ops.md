@@ -13,7 +13,7 @@ definem quando avançar de fase. Complementa a spec
 - IP estático — necessário para o whitelist de IP na Binance quando for a
   chave real.
 - Python ≥ 3.12.
-- Dependências: `pip install duckdb pyarrow backtrader anthropic` (o
+- Dependências: `pip install duckdb pyarrow backtrader anthropic pytz` (o
   restante do runtime é stdlib — spec §4.5, zero dependências
   desnecessárias).
 - Clone do repositório em `/opt/invest-agent` (caminho usado nos exemplos
@@ -23,7 +23,7 @@ definem quando avançar de fase. Complementa a spec
 git clone <repo> /opt/invest-agent
 cd /opt/invest-agent
 python3 -m venv .venv && source .venv/bin/activate
-pip install duckdb pyarrow backtrader anthropic pytest
+pip install duckdb pyarrow backtrader anthropic pytz pytest
 mkdir -p data logs
 ```
 

@@ -28,7 +28,7 @@ enxerga o estado da conta apenas em modo leitura.
 - 📄 **Spec de design:** [`docs/superpowers/specs/2026-09-05-invest-agent-design.md`](docs/superpowers/specs/2026-09-05-invest-agent-design.md)
 - 🧭 **Runbook de operação:** [`docs/ops.md`](docs/ops.md)
 
-**Stack:** Python 3.12 · [backtrader](https://www.backtrader.com/) · [DuckDB](https://duckdb.org/) + Parquet · SQLite · [API da Claude](https://docs.claude.com) (Haiku 4.5 na triagem, Sonnet na proposta, Opus na revisão semanal via Batch) · Telegram Bot API em stdlib — 4 dependências de runtime, nenhum framework de agente.
+**Stack:** Python 3.12 · [backtrader](https://www.backtrader.com/) · [DuckDB](https://duckdb.org/) + Parquet · SQLite · [API da Claude](https://docs.claude.com) (Haiku 4.5 na triagem, Sonnet na proposta, Opus na revisão semanal via Batch) · Telegram Bot API em stdlib — 5 dependências de runtime, nenhum framework de agente.
 
 | | |
 |---|---|
