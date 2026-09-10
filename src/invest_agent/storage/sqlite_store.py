@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS api_costs (
     date TEXT NOT NULL,
     usd REAL NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_news_url ON news(url);
+CREATE INDEX IF NOT EXISTS idx_news_simhash ON news(simhash);
+CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_log(ts);
 """
 
 
@@ -134,6 +137,30 @@ class SqliteStore:
     def known_simhashes(self) -> list[int]:
         rows = self._con.execute("SELECT simhash FROM news").fetchall()
         return [_from_signed(value) for (value,) in rows]
+
+    # --- enriquecimento LLM de notícias (Fase 2b) ---
+
+    def unenriched_news(self, limit: int = 20) -> list[tuple[str, str, str]]:
+        rows = self._con.execute(
+            "SELECT id, title, summary FROM news WHERE summary_llm IS NULL"
+            " ORDER BY ingested_at LIMIT ?", (limit,)).fetchall()
+        return [tuple(r) for r in rows]
+
+    def set_news_enrichment(self, news_id: str, summary_llm: str,
+                            sentiment: str, materiality: int) -> None:
+        self._con.execute(
+            "UPDATE news SET summary_llm=?, sentiment=?, materiality=?"
+            " WHERE id=?", (summary_llm, sentiment, materiality, news_id))
+        self._con.commit()
+
+    def recent_news(self, since: datetime, limit: int = 15) -> list[tuple]:
+        rows = self._con.execute(
+            "SELECT title, source, assets, published_at, sentiment,"
+            " materiality FROM news WHERE ingested_at >= ?"
+            " ORDER BY ingested_at DESC LIMIT ?",
+            (since.isoformat(), limit)).fetchall()
+        return [(r[0], r[1], tuple(a for a in r[2].split(",") if a),
+                 r[3], r[4], r[5]) for r in rows]
 
     # --- macro ---
 
