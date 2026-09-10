@@ -32,6 +32,7 @@ def ensure_history(store: CandleStore, client, symbol: str, interval: str,
     start = latest + timedelta(milliseconds=1) if latest is not None else since
     tail = client.klines_range(symbol, interval, start=start, end=now)
     if tail:
+        tail = [c for c in tail if c.close_time <= now]
         added += store.append(tail)
     return added
 

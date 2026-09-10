@@ -73,3 +73,23 @@ def test_idempotente(tmp_path):
     second = ensure_history(store, client, "BTCUSDT", "1h", SINCE, NOW,
                             fetch_month_fn=lambda *a, **k: None)
     assert first == 3 and second == 0
+
+
+def test_filtra_candles_em_formacao(tmp_path):
+    """Apenas candles com close_time <= now entram no store; candles em
+    formação (close_time > now) são descartados."""
+    store = CandleStore(tmp_path)
+
+    # Candle fechado: close_time < NOW
+    closed_candle = _candle(datetime(2024, 3, 10, 10, 0, tzinfo=timezone.utc))
+    # Candle em formação: open_time tal que close_time > NOW
+    forming_candle = _candle(datetime(2024, 3, 10, 11, 1, tzinfo=timezone.utc))
+
+    client = FakeClient([closed_candle, forming_candle])
+    added = ensure_history(store, client, "BTCUSDT", "1h", SINCE, NOW,
+                          fetch_month_fn=lambda *a, **k: None)
+
+    assert added == 1
+    stored = store.read("BTCUSDT", "1h")
+    assert len(stored) == 1
+    assert stored[0].open_time == closed_candle.open_time
