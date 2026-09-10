@@ -143,7 +143,8 @@ def _notify(notifier: Callable[[str], None] | None, text: str) -> None:
 
 def _execute_approved(store: SqliteStore, adapter,
                       notifier: Callable[[str], None] | None,
-                      dry_run: bool, stop_loss_pct: float) -> None:
+                      dry_run: bool, stop_loss_pct: float,
+                      now: datetime) -> None:
     if dry_run:
         return
     for decision_id in store.approved_pending():
@@ -151,8 +152,29 @@ def _execute_approved(store: SqliteStore, adapter,
         if record is None or not record.order_json:
             store.set_pending_status(decision_id, "executed")
             continue
+        if now - record.ts > timedelta(hours=24):
+            # aprovação nunca reavaliada por 24h+ — não executa às cegas,
+            # exige re-aprovação sobre condições atuais.
+            store.set_pending_status(decision_id, "expired")
+            _notify(notifier,
+                    f"⚠️ aprovação {decision_id} expirada (mais de 24h) — "
+                    f"re-aprove se ainda quiser executar")
+            continue
         order = OrderIntent(**json.loads(record.order_json))
-        executed = _execute(store, adapter, order, stop_loss_pct)
+        try:
+            executed = _execute(store, adapter, order, stop_loss_pct)
+        except Exception as err:
+            # CRITICAL: sem isto, a linha ficava 'approved' para sempre e o
+            # próximo ciclo reenviaria a MESMA ordem (mesmo
+            # client_order_id) de novo — double-buy sem stop, repetido a
+            # cada ciclo. Marca 'failed' (fora do alcance de
+            # approved_pending) e re-levanta: fail-closed preservado, mas
+            # sem retry automático.
+            store.set_pending_status(decision_id, "failed")
+            _notify(notifier,
+                    f"⚠️ ordem aprovada {decision_id} falhou: "
+                    f"{type(err).__name__} — não será re-tentada")
+            raise
         store.set_pending_status(decision_id, "executed")
         _notify(notifier,
                 f"✅ ordem aprovada executada: {order.side} {order.qty:g} "
@@ -170,13 +192,16 @@ def run_cycle(store: SqliteStore, candle_store: CandleStore, adapter,
     cid = cycle_id(now)
     heartbeat_beat(settings.heartbeat_path, now)
     _expire_pending(store, now)
-    _execute_approved(store, adapter, notifier, dry_run,
-                      engine.profile.stop_loss_pct)
 
     halt = active_halt(store, now)
     if halt is not HaltLevel.NONE:
+        # I3: aprovadas esperam a liberação do halt — não são enviadas
+        # enquanto um breaker está ativo (a linha permanece 'approved').
         return CycleResult(cid, "halted",
                            [f"halt {halt.name} ativo"], False, halt.name)
+
+    _execute_approved(store, adapter, notifier, dry_run,
+                      engine.profile.stop_loss_pct, now)
 
     if store.api_cost_today(now.date()) >= settings.api_cost_daily_cap_usd:
         record_halt_if_needed(store, HaltLevel.DAY, now)

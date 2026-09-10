@@ -478,13 +478,148 @@ def test_aprovado_executa_no_ciclo_seguinte(tmp_path):
     store.close()
 
 
-def test_notifier_que_falha_nao_derruba_ciclo(tmp_path):
-    store, cs, adapter, engine, proposer, settings = _fixture(tmp_path)
+def test_notifier_falha_nao_impede_execucao_da_aprovada(tmp_path):
+    # I2: substitui o teste antigo, que usava um proposer HOLD e nunca
+    # chamava o notifier (approved_pending() vazio na store nova, então o
+    # loop de _execute_approved nem executava). Este exercita de verdade o
+    # contrato "notificação nunca derruba o ciclo": notifier explode, mas a
+    # ordem aprovada ainda é enviada e o ciclo completa normalmente.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
 
     def notifier_ruim(texto):
         raise RuntimeError("telegram fora do ar")
 
-    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW,
-                       notifier=notifier_ruim)
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    result = run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+                       NOW + timedelta(hours=1), notifier=notifier_ruim)
     assert result.verdict_status == "approved"  # ciclo completou
+    assert len(adapter.orders) == 1  # a ordem aprovada foi enviada mesmo assim
+    status = store._con.execute(
+        "SELECT status FROM pending_approvals WHERE decision_id=?",
+        (decision_id,)).fetchone()[0]
+    assert status == "executed"
+    store.close()
+
+
+def test_hitl_notifier_falha_nao_impede_pendencia(tmp_path):
+    # I2: segundo teste de substituição — cenário NEEDS_APPROVAL (primeiro
+    # trade do símbolo) com hitl_notifier que explode. O ciclo precisa
+    # completar e a pendência precisa ser criada normalmente.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+
+    def hitl_notifier_ruim(decision_id, order, reasons):
+        raise RuntimeError("telegram fora do ar")
+
+    result = run_cycle(store, cs, adapter, engine, proposer, settings, NOW,
+                       hitl_notifier=hitl_notifier_ruim)
+    assert result.verdict_status == "needs_approval"  # ciclo completou
+    assert len(store.get_pending()) == 1  # pendência foi criada mesmo assim
+    store.close()
+
+
+def test_aprovada_que_falha_no_execute_marca_failed_e_nao_reenvia(tmp_path):
+    # CRITICAL: sem try/except em _execute_approved, uma falha em _execute
+    # (ex.: place_stop_loss) deixava a linha 'approved' para sempre — o
+    # próximo ciclo reenviaria a MESMA ordem (mesmo client_order_id) de
+    # novo, indefinidamente. O fix: marca 'failed' e re-levanta (fail-closed
+    # preservado, mas sem retry automático).
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    adapter = FakeAdapter(stop_loss_error=RuntimeError("falha ao colocar stop"))
+    store, cs, _, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop, adapter=adapter)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
+
+    avisos = []
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    with pytest.raises(RuntimeError):
+        run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+                  NOW + timedelta(hours=1), notifier=avisos.append)
+
+    assert len(adapter.orders) == 1  # a ordem foi enviada uma única vez
+    assert store.approved_pending() == []  # não fica mais 'approved'
+    status = store._con.execute(
+        "SELECT status FROM pending_approvals WHERE decision_id=?",
+        (decision_id,)).fetchone()[0]
+    assert status == "failed"
+    assert any("falhou" in a and "não será re-tentada" in a for a in avisos)
+
+    # ciclo seguinte não reenvia a ordem (a linha não está mais 'approved')
+    run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+             NOW + timedelta(hours=2))
+    assert len(adapter.orders) == 1  # nenhuma ordem nova
+    store.close()
+
+
+def test_halt_ativo_nao_executa_aprovada_espera_liberacao(tmp_path):
+    # I3: ordens aprovadas não podem ser enviadas enquanto um halt está
+    # ativo — a linha simplesmente espera a liberação, sem virar 'executed'
+    # nem 'failed'.
+    from invest_agent.breakers import HaltLevel
+    from invest_agent.orchestrator.state import record_halt_if_needed
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
+
+    record_halt_if_needed(store, HaltLevel.MONTH, NOW + timedelta(minutes=5))
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    result = run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+                       NOW + timedelta(hours=1))
+    assert result.verdict_status == "halted"
+    assert adapter.orders == []  # nada enviado — halt bloqueia antes
+    assert store.approved_pending() == [decision_id]  # continua approved
+
+    store.release_halt()
+    result2 = run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+                        NOW + timedelta(hours=2))
+    assert result2.verdict_status != "halted"
+    assert len(adapter.orders) == 1  # liberado — agora executa
+    assert store.get_pending() == []
+    store.close()
+
+
+def test_aprovada_com_mais_de_24h_expira_sem_executar(tmp_path):
+    # I3: uma aprovação nunca reavaliada por 24h+ não pode ser executada às
+    # cegas — expira e pede re-aprovação.
+    prop = Proposal(symbol="BTCUSDT", action=Action.BUY, conviction=0.019,
+                    rationale="x", cycle_id="2026091012")
+    store, cs, adapter, engine, proposer, settings = _fixture(
+        tmp_path, proposal=prop)
+    run_cycle(store, cs, adapter, engine, proposer, settings, NOW)
+    (pend,) = store.get_pending()
+    decision_id = pend[0]
+    store.set_pending_status(decision_id, "approved")
+
+    avisos = []
+    hold = Proposal(symbol="BTCUSDT", action=Action.HOLD, conviction=0.0,
+                    rationale="x", cycle_id="2026091013")
+    run_cycle(store, cs, adapter, engine, lambda ctx: hold, settings,
+             NOW + timedelta(hours=25), notifier=avisos.append)
+    assert adapter.orders == []  # nada enviado
+    status = store._con.execute(
+        "SELECT status FROM pending_approvals WHERE decision_id=?",
+        (decision_id,)).fetchone()[0]
+    assert status == "expired"
+    assert any("expirada" in a for a in avisos)
     store.close()
