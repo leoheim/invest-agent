@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .client import usage_cost_usd
 from ..storage.sqlite_store import SqliteStore
 
 WEEKLY_MODEL = "claude-opus-5"
@@ -49,6 +50,7 @@ def submit_weekly_review(batches, store: SqliteStore, now: datetime) -> str:
         "params": {
             "model": WEEKLY_MODEL,
             "max_tokens": 8000,
+            "thinking": {"type": "disabled"},
             "system": WEEKLY_SYSTEM,
             "messages": [{"role": "user", "content": prompt}],
         },
@@ -57,17 +59,25 @@ def submit_weekly_review(batches, store: SqliteStore, now: datetime) -> str:
 
 
 def collect_weekly_review(batches, batch_id: str, learnings_dir: Path,
-                          now: datetime) -> Path | None:
+                          now: datetime,
+                          store: SqliteStore | None = None) -> Path | None:
     if batches.retrieve(batch_id).processing_status != "ended":
         return None
     for result in batches.results(batch_id):
         if result.result.type != "succeeded":
             continue
-        text = next((b.text for b in result.result.message.content
+        message = result.result.message
+        text = next((b.text for b in message.content
                      if getattr(b, "type", "") == "text"), "")
         learnings_dir.mkdir(parents=True, exist_ok=True)
         path = learnings_dir / f"{now:%Y-%m-%d}-revisao-semanal.md"
         path.write_text(text, encoding="utf-8")
+        if store is not None:
+            # Batch API = -50% sobre o preço de lista (spec: todo custo é
+            # registrado — I3, sem isso o breaker diário fica cego ao
+            # gasto do Opus semanal).
+            cost = usage_cost_usd(WEEKLY_MODEL, message.usage) * 0.5
+            store.add_api_cost(now.date(), cost)
         return path
     return None
 
@@ -92,7 +102,10 @@ def main(argv: list[str] | None = None) -> None:
         print(f"batch submetido: {batch_id}" if batch_id
               else "sem decisões na semana — nada a revisar")
     elif args.collect:
-        path = collect_weekly_review(batches, args.collect, args.learnings, now)
+        store = SqliteStore(args.db)
+        path = collect_weekly_review(batches, args.collect, args.learnings,
+                                     now, store=store)
+        store.close()
         print(f"learning gravado: {path}" if path
               else "batch ainda processando — tente mais tarde")
     else:

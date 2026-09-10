@@ -50,6 +50,7 @@ class LlmClient:
             response = self._create(
                 model=model,
                 max_tokens=max_tokens,
+                thinking={"type": "disabled"},
                 system=[{
                     "type": "text",
                     "text": system,

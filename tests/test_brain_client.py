@@ -51,6 +51,7 @@ def test_structured_parseia_e_custa():
     assert kwargs["max_tokens"] == 500
     assert kwargs["output_config"] == {"format": {"type": "json_schema",
                                                   "schema": SCHEMA}}
+    assert kwargs["thinking"] == {"type": "disabled"}
     system_block = kwargs["system"][0]
     assert system_block["text"] == "sistema"
     assert system_block["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
