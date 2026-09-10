@@ -1,6 +1,10 @@
 """Triagem por keyword ANTES de qualquer LLM (spec §4.1) — barata,
 determinística, e o que ela descarta nunca gasta token. O enriquecimento
-LLM (resumo/sentimento/materialidade) é da Fase 2."""
+LLM (resumo/sentimento/materialidade) é da Fase 2.
+
+Matching: por default, palavras inteiras (\\b...\\b). Exceção: PREFIX_KEYWORDS
+que casam deliberadamente como prefixo (ex.: "regulament" casa
+"regulamentação"/"regulamento" mas não "regulador" solto)."""
 from __future__ import annotations
 
 import re
@@ -16,13 +20,20 @@ ASSET_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 MACRO_KEYWORDS: tuple[str, ...] = (
-    "fed", "juros", "selic", "copom", "inflação", "cpi", "sec", "etf",
+    "fed", "juros", "selic", "copom", "inflação", "sec", "etf",
     "regulament", "banco central", "bcb", "halving", "cvm",
 )
 
+PREFIX_KEYWORDS: frozenset[str] = frozenset({"regulament"})
+
 
 def _has_word(word: str, text: str) -> bool:
-    return re.search(rf"\b{re.escape(word)}", text) is not None
+    if word in PREFIX_KEYWORDS:
+        # Prefixais: casam no início da palavra
+        return re.search(rf"\b{re.escape(word)}", text) is not None
+    else:
+        # Não-prefixais: casam palavra inteira
+        return re.search(rf"\b{re.escape(word)}\b", text) is not None
 
 
 def match_assets(text: str) -> tuple[str, ...]:

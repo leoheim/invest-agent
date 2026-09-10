@@ -46,3 +46,35 @@ def test_keywords_minimas_presentes():
     assert {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"} <= set(
         ASSET_KEYWORDS)
     assert "selic" in MACRO_KEYWORDS and "fed" in MACRO_KEYWORDS
+
+
+def test_assets_nao_casam_em_meio_de_palavra():
+    # "eth" não casa dentro de outras palavras (ethos, ethical)
+    assert match_assets("ethos da empresa") == ()
+    assert match_assets("ethical hacking") == ()
+    # "sol" não casa dentro de "solar"
+    assert match_assets("energia solar em alta") == ()
+    # "xrp" não casa dentro de "xrpay"
+    assert match_assets("xrpay startup crescendo") == ()
+
+
+def test_macro_nao_casa_em_meio_de_palavra():
+    # "sec" não casa dentro de "secretário"
+    item = _item("O secretário do tesouro falou")
+    kept = triage([item])
+    assert kept == []  # descartado, sem ativo nem macro válido
+    # "cpi" removido; "CPI da câmara" não casa mais
+    item = _item("A CPI da câmara investiga fraudes")
+    kept = triage([item])
+    assert kept == []
+
+
+def test_macro_positivos_mantidos():
+    # "sec" como macro em "SEC processa exchange"
+    item = _item("SEC processa exchange de cripto")
+    kept = triage([item])
+    assert len(kept) == 1 and kept[0][1] == ()  # mantém como macro
+    # "regulament" como prefixo em "regulamentação"
+    item = _item("regulamentação de cripto avança")
+    kept = triage([item])
+    assert len(kept) == 1 and kept[0][1] == ()  # mantém como macro
